@@ -17,7 +17,8 @@ jobs:
       - name: Install build tools
         run: |
           brew install cmake ninja jq
-        - name: Download latest Cmajor macOS release
+
+      - name: Download latest Cmajor macOS release
         run: |
           mkdir -p tools/cmajor
 
@@ -69,6 +70,7 @@ jobs:
           find tools/cmajor -type f -name "cmaj" -exec chmod +x {} \;
           echo "Found cmaj executable:"
           find tools/cmajor -type f -name "cmaj"
+
       - name: Export Cmajor patch as JUCE plugin
         run: |
           CMAJ=$(find "$PWD/tools/cmajor" -type f -name "cmaj" | head -n 1)
