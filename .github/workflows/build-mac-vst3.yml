@@ -41,7 +41,7 @@ jobs:
           # Direct DMG download with SHA256 verification
           DMG_URL="https://github.com/cmajor-lang/cmajor/releases/download/YOUR_VERSION_TAG/cmajor-mac.dmg"
           DMG_FILE="cmajor-mac.dmg"
-          EXPECTED_SHA256="113bd1d487530b97d4eb5a740da562c3cee1066444f5fb66e8a8fdec64422c21"
+          EXPECTED_SHA256="0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"
 
           curl -L "$DMG_URL" -o "$DMG_FILE"
 
