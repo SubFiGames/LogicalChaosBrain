@@ -5,7 +5,8 @@ name: Build macOS VST3
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
+permissions:
+  contents: read
 jobs:
   build-macos-vst3:
     runs-on: macos-latest
@@ -19,57 +20,61 @@ jobs:
           brew install cmake ninja jq || true
 
       - name: Download Cmajor macOS tools
+        shell: bash
         run: |
           set -e
 
           mkdir -p tools/cmajor
 
-          echo "Fetching Cmajor release list..."
+          echo "Fetching Cmajor release list with authenticated GitHub API..."
+
           curl -L \
             -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
             -H "User-Agent: logical-chaos-build" \
-            https://api.github.com/repos/cmajor-lang/cmajor/releases \
+            https://api.github.com/repos/SoundStacks/cmajor/releases \
             -o releases.json
 
           echo "GitHub response preview:"
-          head -c 1000 releases.json
-          echo ""
+          head -c 500 releases.json
           echo ""
 
           echo "Searching for macOS downloadable asset..."
 
-          DOWNLOAD_URL=$(jq -r '
-            [
-              .[]?
-              | .assets[]?
-              | select(
-                  (.name | test("mac|osx|darwin"; "i"))
-                  and
-                  (.name | test("zip|tar.gz|tgz"; "i"))
-                )
-              | .browser_download_url
-            ][0] // empty
+          ASSET_URL=$(jq -r '
+            if type == "array" then
+              [
+                .[].assets[]
+                | select(
+                    (.name | test("mac|osx|darwin"; "i"))
+                    and
+                    (.name | test("zip|tar|gz|dmg"; "i"))
+                  )
+                | .browser_download_url
+              ][0]
+            else
+              empty
+            end
           ' releases.json)
 
-          if [ -z "$DOWNLOAD_URL" ]; then
+          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
             echo "Could not find a macOS Cmajor release asset."
-            echo "Available asset names were:"
-            jq -r '.[]? | .assets[]? | .name' releases.json
+            echo "Full GitHub API response:"
+            cat releases.json
             exit 1
           fi
 
           echo "Downloading:"
-          echo "$DOWNLOAD_URL"
+          echo "$ASSET_URL"
 
-          curl -L "$DOWNLOAD_URL" -o cmajor-macos.zip
+          curl -L "$ASSET_URL" -o cmajor-macos.zip
 
-          echo "Unzipping..."
+          echo "Extracting Cmajor..."
           unzip -q cmajor-macos.zip -d tools/cmajor
 
-          echo "Downloaded files:"
-          find tools/cmajor -maxdepth 4 -type f | head -100
-
-      - name: Find cmaj executable
+          echo "Cmajor files:"
+          find tools/cmajor -maxdepth 4 -type f | head -100      - name: Find cmaj executable
         run: |
           set -e
 
