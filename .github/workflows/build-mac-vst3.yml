@@ -1,1 +1,59 @@
+name: Build macOS VST3
 
+on:
+  workflow_dispatch:
+
+jobs:
+  build-macos-vst3:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          brew install cmake ninja
+
+      - name: Download latest Cmajor release
+        run: |
+          mkdir -p tools/cmajor
+          curl -L https://github.com/SoundStacks/cmajor/releases/latest/download/cmaj-mac.zip -o cmaj-mac.zip
+          unzip cmaj-mac.zip -d tools/cmajor
+          find tools/cmajor -type f -name "cmaj" -exec chmod +x {} \;
+          find tools/cmajor -type f -name "cmaj"
+
+      - name: Export Cmajor patch as JUCE plugin
+        run: |
+          CMAJ=$(find "$PWD/tools/cmajor" -type f -name "cmaj" | head -n 1)
+          echo "Using cmaj: $CMAJ"
+          "$CMAJ" generate --target=juce LogicalChaos.cmajorpatch --output=Build/JUCEPlugin
+
+      - name: Show generated project
+        run: |
+          find Build/JUCEPlugin -maxdepth 5 -type f
+
+      - name: Build generated Xcode project
+        run: |
+          XCODEPROJ=$(find Build/JUCEPlugin -name "*.xcodeproj" | head -n 1)
+          echo "Xcode project: $XCODEPROJ"
+          xcodebuild \
+            -project "$XCODEPROJ" \
+            -configuration Release \
+            -alltargets \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Collect VST3
+        run: |
+          mkdir -p artifact
+          VST3=$(find Build/JUCEPlugin -name "*.vst3" | head -n 1)
+          echo "Found VST3: $VST3"
+          cp -R "$VST3" artifact/
+
+      - name: Upload VST3 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LogicalChaos-macOS-VST3
+          path: artifact
