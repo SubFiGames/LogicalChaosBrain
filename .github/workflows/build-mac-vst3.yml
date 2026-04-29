@@ -17,42 +17,58 @@ jobs:
       - name: Install build tools
         run: |
           brew install cmake ninja jq
-
-      - name: Download latest Cmajor macOS release
+        - name: Download latest Cmajor macOS release
         run: |
           mkdir -p tools/cmajor
 
-          echo "Getting latest Cmajor release info..."
-          curl -L https://api.github.com/repos/cmajor-lang/cmajor/releases/latest -o latest-release.json
+          echo "Getting Cmajor releases from GitHub..."
+          curl -L \
+            -H "Accept: application/vnd.github+json" \
+            -H "User-Agent: logical-chaos-build" \
+            https://api.github.com/repos/SoundStacks/cmajor/releases \
+            -o releases.json
+
+          echo "GitHub response preview:"
+          head -c 500 releases.json
+          echo ""
 
           echo "Available release assets:"
-          jq -r '.assets[].name' latest-release.json
+          jq -r '.[0].assets[].name' releases.json
 
-          CMAJ_URL=$(jq -r '.assets[]
-            | select(.name | test("(?i)(mac|osx|darwin).*\\.zip$"))
-            | .browser_download_url' latest-release.json | head -n 1)
+          CMAJ_URL=$(jq -r '.[0].assets[]
+            | select(.name | test("(?i)(mac|macos|darwin|osx).*\\.(zip|tar\\.gz)$"))
+            | .browser_download_url' releases.json | head -n 1)
 
           echo "Selected Cmajor asset URL:"
           echo "$CMAJ_URL"
 
           if [ -z "$CMAJ_URL" ] || [ "$CMAJ_URL" = "null" ]; then
-            echo "Could not find a macOS Cmajor zip asset."
-            echo "Here are the assets GitHub returned:"
-            jq -r '.assets[] | "\(.name) -> \(.browser_download_url)"' latest-release.json
+            echo "Could not find a macOS Cmajor zip/tar.gz asset."
+            echo "Here are all assets GitHub returned:"
+            jq -r '.[0].assets[] | "\(.name) -> \(.browser_download_url)"' releases.json
             exit 1
           fi
 
-          curl -L "$CMAJ_URL" -o cmaj-mac.zip
+          curl -L "$CMAJ_URL" -o cmajor-download
 
           echo "Downloaded file type:"
-          file cmaj-mac.zip
+          file cmajor-download
 
-          unzip -t cmaj-mac.zip
-          unzip cmaj-mac.zip -d tools/cmajor
+          if file cmajor-download | grep -qi "zip"; then
+            mv cmajor-download cmajor-download.zip
+            unzip -t cmajor-download.zip
+            unzip cmajor-download.zip -d tools/cmajor
+          elif file cmajor-download | grep -qi "gzip"; then
+            mv cmajor-download cmajor-download.tar.gz
+            tar -xzf cmajor-download.tar.gz -C tools/cmajor
+          else
+            echo "Downloaded file is not a zip or tar.gz."
+            exit 1
+          fi
 
           find tools/cmajor -type f -name "cmaj" -exec chmod +x {} \;
+          echo "Found cmaj executable:"
           find tools/cmajor -type f -name "cmaj"
-
       - name: Export Cmajor patch as JUCE plugin
         run: |
           CMAJ=$(find "$PWD/tools/cmajor" -type f -name "cmaj" | head -n 1)
