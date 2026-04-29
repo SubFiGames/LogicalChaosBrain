@@ -1,17 +1,17 @@
 {
     "CmajorVersion": 1,
-    "ID": "com.logicalchaos.melodymachine.v2",
-    "version": "2.0.0",
+    "ID": "com.subfigames.logicalchaos.melodymachine",
     "name": "Logical Chaos Melody Machine",
-    "description": "A GUI-controlled MIDI melody generator and step sequencer for creating 8, 16, and 32 step melodies for VST instruments.",
-    "manufacturer": "Logical Chaos",
-    "category": "instrument",
-    "isInstrument": true,
+    "description": "A controllable random melody and step sequencer with chaos, glide and random-note steps for creating beautiful or crazy MIDI melodies.",
+    "category": "Instrument",
+    "manufacturer": "SubFi Games",
+    "version": "3.0.0",
+    "mainProcessor": "MainProcessor",
     "source": "Main.cmajor",
     "view": {
         "src": "view.js",
-        "width": 760,
-        "height": 620,
+        "width": 1500,
+        "height": 1020,
         "resizable": true
     }
 }
