@@ -16,110 +16,130 @@ jobs:
 
       - name: Install build tools
         run: |
-          brew install cmake ninja jq
+          brew install cmake ninja jq || true
 
-      - name: Download latest Cmajor macOS release
+      - name: Download Cmajor macOS tools
         run: |
+          set -e
+
           mkdir -p tools/cmajor
 
-          echo "Getting Cmajor releases from GitHub..."
+          echo "Fetching Cmajor release list..."
           curl -L \
             -H "Accept: application/vnd.github+json" \
             -H "User-Agent: logical-chaos-build" \
-            https://api.github.com/repos/SoundStacks/cmajor/releases \
+            https://api.github.com/repos/cmajor-lang/cmajor/releases \
             -o releases.json
 
           echo "GitHub response preview:"
-          head -c 500 releases.json
+          head -c 1000 releases.json
+          echo ""
           echo ""
 
-          echo "Available release assets:"
-          jq -r '.[0].assets[].name' releases.json
+          echo "Searching for macOS downloadable asset..."
 
-          CMAJ_URL=$(jq -r '.[0].assets[]
-            | select(.name | test("(?i)(mac|macos|darwin|osx).*\\.(zip|tar\\.gz)$"))
-            | .browser_download_url' releases.json | head -n 1)
+          DOWNLOAD_URL=$(jq -r '
+            [
+              .[]?
+              | .assets[]?
+              | select(
+                  (.name | test("mac|osx|darwin"; "i"))
+                  and
+                  (.name | test("zip|tar.gz|tgz"; "i"))
+                )
+              | .browser_download_url
+            ][0] // empty
+          ' releases.json)
 
-          echo "Selected Cmajor asset URL:"
-          echo "$CMAJ_URL"
-
-          if [ -z "$CMAJ_URL" ] || [ "$CMAJ_URL" = "null" ]; then
-            echo "Could not find a macOS Cmajor zip/tar.gz asset."
-            echo "Here are all assets GitHub returned:"
-            jq -r '.[0].assets[] | "\(.name) -> \(.browser_download_url)"' releases.json
+          if [ -z "$DOWNLOAD_URL" ]; then
+            echo "Could not find a macOS Cmajor release asset."
+            echo "Available asset names were:"
+            jq -r '.[]? | .assets[]? | .name' releases.json
             exit 1
           fi
 
-          curl -L "$CMAJ_URL" -o cmajor-download
+          echo "Downloading:"
+          echo "$DOWNLOAD_URL"
 
-          echo "Downloaded file type:"
-          file cmajor-download
+          curl -L "$DOWNLOAD_URL" -o cmajor-macos.zip
 
-          if file cmajor-download | grep -qi "zip"; then
-            mv cmajor-download cmajor-download.zip
-            unzip -t cmajor-download.zip
-            unzip cmajor-download.zip -d tools/cmajor
-          elif file cmajor-download | grep -qi "gzip"; then
-            mv cmajor-download cmajor-download.tar.gz
-            tar -xzf cmajor-download.tar.gz -C tools/cmajor
-          else
-            echo "Downloaded file is not a zip or tar.gz."
-            exit 1
-          fi
+          echo "Unzipping..."
+          unzip -q cmajor-macos.zip -d tools/cmajor
 
-          find tools/cmajor -type f -name "cmaj" -exec chmod +x {} \;
-          echo "Found cmaj executable:"
-          find tools/cmajor -type f -name "cmaj"
+          echo "Downloaded files:"
+          find tools/cmajor -maxdepth 4 -type f | head -100
 
-      - name: Export Cmajor patch as JUCE plugin
+      - name: Find cmaj executable
         run: |
-          CMAJ=$(find "$PWD/tools/cmajor" -type f -name "cmaj" | head -n 1)
-          echo "Using cmaj: $CMAJ"
+          set -e
 
-          if [ -z "$CMAJ" ]; then
-            echo "Could not find cmaj executable after unzipping Cmajor."
+          CMAJ_PATH=$(find tools/cmajor -type f -name "cmaj" | head -1)
+
+          if [ -z "$CMAJ_PATH" ]; then
+            echo "Could not find cmaj executable."
+            echo "Files found:"
             find tools/cmajor -maxdepth 5 -type f
             exit 1
           fi
 
-          "$CMAJ" generate --target=juce LogicalChaos.cmajorpatch --output=Build/JUCEPlugin
+          chmod +x "$CMAJ_PATH"
+          echo "CMAJ_PATH=$CMAJ_PATH" >> "$GITHUB_ENV"
 
-      - name: Show generated project
+          echo "Using cmaj at:"
+          echo "$CMAJ_PATH"
+
+          "$CMAJ_PATH" --help || true
+
+      - name: Export Cmajor patch as JUCE plugin
         run: |
-          find Build/JUCEPlugin -maxdepth 6 -type f
+          set -e
+
+          "$CMAJ_PATH" export --target=juce LogicalChaos.cmajorpatch --output=GeneratedPlugin
+
+          echo "Generated project:"
+          find GeneratedPlugin -maxdepth 4 -type f | head -100
 
       - name: Build generated Xcode project
         run: |
-          XCODEPROJ=$(find Build/JUCEPlugin -name "*.xcodeproj" | head -n 1)
-          echo "Xcode project: $XCODEPROJ"
+          set -e
+
+          XCODEPROJ=$(find GeneratedPlugin -name "*.xcodeproj" | head -1)
 
           if [ -z "$XCODEPROJ" ]; then
             echo "No Xcode project found."
-            find Build/JUCEPlugin -maxdepth 6 -type f
+            find GeneratedPlugin -maxdepth 5 -type f
             exit 1
           fi
+
+          echo "Found Xcode project:"
+          echo "$XCODEPROJ"
 
           xcodebuild \
             -project "$XCODEPROJ" \
             -configuration Release \
-            -alltargets \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            -scheme "LogicalChaos" \
+            build
 
       - name: Collect VST3
         run: |
-          mkdir -p artifact
-          VST3=$(find Build/JUCEPlugin -name "*.vst3" | head -n 1)
-          echo "Found VST3: $VST3"
+          set -e
 
-          if [ -z "$VST3" ]; then
-            echo "No VST3 file was found."
-            find Build/JUCEPlugin -maxdepth 8 -type d
+          mkdir -p artifact
+
+          echo "Searching for built VST3..."
+          find GeneratedPlugin -name "*.vst3" -print
+
+          VST3_PATH=$(find GeneratedPlugin -name "*.vst3" | head -1)
+
+          if [ -z "$VST3_PATH" ]; then
+            echo "No VST3 was built."
             exit 1
           fi
 
-          cp -R "$VST3" artifact/
+          cp -R "$VST3_PATH" artifact/
+
+          echo "Artifact contents:"
+          find artifact -maxdepth 3 -print
 
       - name: Upload VST3 artifact
         uses: actions/upload-artifact@v4
