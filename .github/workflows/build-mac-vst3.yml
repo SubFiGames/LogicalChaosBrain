@@ -3,6 +3,9 @@ name: Build macOS VST3
 'on':
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-macos-vst3:
     runs-on: macos-latest
@@ -13,13 +16,40 @@ jobs:
 
       - name: Install build tools
         run: |
-          brew install cmake ninja
+          brew install cmake ninja jq
 
-      - name: Download latest Cmajor release
+      - name: Download latest Cmajor macOS release
         run: |
           mkdir -p tools/cmajor
-          curl -L https://github.com/SoundStacks/cmajor/releases/latest/download/cmaj-mac.zip -o cmaj-mac.zip
+
+          echo "Getting latest Cmajor release info..."
+          curl -L https://api.github.com/repos/cmajor-lang/cmajor/releases/latest -o latest-release.json
+
+          echo "Available release assets:"
+          jq -r '.assets[].name' latest-release.json
+
+          CMAJ_URL=$(jq -r '.assets[]
+            | select(.name | test("(?i)(mac|osx|darwin).*\\.zip$"))
+            | .browser_download_url' latest-release.json | head -n 1)
+
+          echo "Selected Cmajor asset URL:"
+          echo "$CMAJ_URL"
+
+          if [ -z "$CMAJ_URL" ] || [ "$CMAJ_URL" = "null" ]; then
+            echo "Could not find a macOS Cmajor zip asset."
+            echo "Here are the assets GitHub returned:"
+            jq -r '.assets[] | "\(.name) -> \(.browser_download_url)"' latest-release.json
+            exit 1
+          fi
+
+          curl -L "$CMAJ_URL" -o cmaj-mac.zip
+
+          echo "Downloaded file type:"
+          file cmaj-mac.zip
+
+          unzip -t cmaj-mac.zip
           unzip cmaj-mac.zip -d tools/cmajor
+
           find tools/cmajor -type f -name "cmaj" -exec chmod +x {} \;
           find tools/cmajor -type f -name "cmaj"
 
@@ -27,16 +57,30 @@ jobs:
         run: |
           CMAJ=$(find "$PWD/tools/cmajor" -type f -name "cmaj" | head -n 1)
           echo "Using cmaj: $CMAJ"
+
+          if [ -z "$CMAJ" ]; then
+            echo "Could not find cmaj executable after unzipping Cmajor."
+            find tools/cmajor -maxdepth 5 -type f
+            exit 1
+          fi
+
           "$CMAJ" generate --target=juce LogicalChaos.cmajorpatch --output=Build/JUCEPlugin
 
       - name: Show generated project
         run: |
-          find Build/JUCEPlugin -maxdepth 5 -type f
+          find Build/JUCEPlugin -maxdepth 6 -type f
 
       - name: Build generated Xcode project
         run: |
           XCODEPROJ=$(find Build/JUCEPlugin -name "*.xcodeproj" | head -n 1)
           echo "Xcode project: $XCODEPROJ"
+
+          if [ -z "$XCODEPROJ" ]; then
+            echo "No Xcode project found."
+            find Build/JUCEPlugin -maxdepth 6 -type f
+            exit 1
+          fi
+
           xcodebuild \
             -project "$XCODEPROJ" \
             -configuration Release \
@@ -50,6 +94,13 @@ jobs:
           mkdir -p artifact
           VST3=$(find Build/JUCEPlugin -name "*.vst3" | head -n 1)
           echo "Found VST3: $VST3"
+
+          if [ -z "$VST3" ]; then
+            echo "No VST3 file was found."
+            find Build/JUCEPlugin -maxdepth 8 -type d
+            exit 1
+          fi
+
           cp -R "$VST3" artifact/
 
       - name: Upload VST3 artifact
