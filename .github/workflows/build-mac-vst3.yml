@@ -20,7 +20,14 @@ jobs:
       - name: Install build tools
         shell: bash
         run: |
+          set -e
           brew install cmake ninja jq || true
+
+      - name: Clone JUCE
+        shell: bash
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
 
       - name: Download Cmajor macOS tools
         shell: bash
@@ -50,9 +57,9 @@ jobs:
               [
                 .[].assets[]
                 | select(
-                    (.name | test("mac|osx|darwin"; "i"))
+                    (.name | test("mac|osx|darwin|apple"; "i"))
                     and
-                    (.name | test("zip|tar|gz|dmg"; "i"))
+                    (.name | test("zip|tar|gz"; "i"))
                   )
                 | .browser_download_url
               ][0]
@@ -71,13 +78,18 @@ jobs:
           echo "Downloading:"
           echo "$ASSET_URL"
 
-          curl -L "$ASSET_URL" -o cmajor-macos.zip
+          curl -L "$ASSET_URL" -o cmajor-macos-archive
 
           echo "Extracting Cmajor..."
-          unzip -q cmajor-macos.zip -d tools/cmajor
+
+          if file cmajor-macos-archive | grep -qi "Zip"; then
+            unzip -q cmajor-macos-archive -d tools/cmajor
+          else
+            tar -xf cmajor-macos-archive -C tools/cmajor
+          fi
 
           echo "Cmajor files:"
-          find tools/cmajor -maxdepth 4 -type f | head -100
+          find tools/cmajor -maxdepth 5 -type f | head -150
 
       - name: Find cmaj executable
         shell: bash
@@ -89,7 +101,7 @@ jobs:
           if [ -z "$CMAJ_PATH" ]; then
             echo "Could not find cmaj executable."
             echo "Files found:"
-            find tools/cmajor -maxdepth 5 -type f
+            find tools/cmajor -maxdepth 6 -type f
             exit 1
           fi
 
@@ -101,37 +113,50 @@ jobs:
 
           "$CMAJ_PATH" --help || true
 
-      - name: Export Cmajor patch as JUCE plugin
+      - name: Validate required project files
         shell: bash
         run: |
           set -e
 
-          "$CMAJ_PATH" export --target=juce LogicalChaos.cmajorpatch --output=GeneratedPlugin
+          echo "Repo files:"
+          find . -maxdepth 3 -type f | sort
+
+          test -f LogicalChaos.cmajorpatch
+          test -f Main.cmajor
+          test -f view.js
+
+      - name: Generate JUCE project from Cmajor patch
+        shell: bash
+        run: |
+          set -e
+
+          "$CMAJ_PATH" generate \
+            --target=juce \
+            --output=GeneratedPlugin \
+            --jucePath="$GITHUB_WORKSPACE/tools/JUCE" \
+            LogicalChaos.cmajorpatch
 
           echo "Generated project:"
-          find GeneratedPlugin -maxdepth 4 -type f | head -100
+          find GeneratedPlugin -maxdepth 5 -type f | head -200
 
-      - name: Build generated Xcode project
+      - name: Configure generated plugin
         shell: bash
         run: |
           set -e
 
-          XCODEPROJ=$(find GeneratedPlugin -name "*.xcodeproj" | head -1)
+          cmake \
+            -S GeneratedPlugin \
+            -B build \
+            -G Xcode \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
 
-          if [ -z "$XCODEPROJ" ]; then
-            echo "No Xcode project found."
-            find GeneratedPlugin -maxdepth 5 -type f
-            exit 1
-          fi
+      - name: Build generated plugin
+        shell: bash
+        run: |
+          set -e
 
-          echo "Found Xcode project:"
-          echo "$XCODEPROJ"
-
-          xcodebuild \
-            -project "$XCODEPROJ" \
-            -configuration Release \
-            -scheme "LogicalChaos" \
-            build
+          cmake --build build --config Release --parallel
 
       - name: Collect VST3
         shell: bash
@@ -141,19 +166,27 @@ jobs:
           mkdir -p artifact
 
           echo "Searching for built VST3..."
-          find GeneratedPlugin -name "*.vst3" -print
+          find build -name "*.vst3" -print
 
-          VST3_PATH=$(find GeneratedPlugin -name "*.vst3" | head -1)
+          VST3_PATH=$(find build -name "*.vst3" | head -1)
 
           if [ -z "$VST3_PATH" ]; then
             echo "No VST3 was built."
+            echo "Build folder:"
+            find build -maxdepth 6 -type f | head -300
             exit 1
           fi
 
+          echo "Found VST3:"
+          echo "$VST3_PATH"
+
           cp -R "$VST3_PATH" artifact/
 
+          echo "Ad-hoc signing VST3..."
+          codesign --force --deep --sign - artifact/*.vst3 || true
+
           echo "Artifact contents:"
-          find artifact -maxdepth 3 -print
+          find artifact -maxdepth 4 -print
 
       - name: Upload VST3 artifact
         uses: actions/upload-artifact@v4
