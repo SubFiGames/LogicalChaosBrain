@@ -1,0 +1,17 @@
+{
+    "CmajorVersion": 1,
+    "ID": "com.logicalchaos.melodymachine.v2",
+    "version": "2.0.0",
+    "name": "Logical Chaos Melody Machine",
+    "description": "A GUI-controlled MIDI melody generator and step sequencer for creating 8, 16, and 32 step melodies for VST instruments.",
+    "manufacturer": "Logical Chaos",
+    "category": "instrument",
+    "isInstrument": true,
+    "source": "Main.cmajor",
+    "view": {
+        "src": "view.js",
+        "width": 760,
+        "height": 620,
+        "resizable": true
+    }
+}

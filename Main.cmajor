@@ -1,0 +1,383 @@
+processor MainProcessor [[ main ]]
+{
+    input event std::midi::Message midiIn;
+    output event std::midi::Message midiOut;
+    output event std::midi::Message midiToUI;
+    output event int stepToUI;
+
+    // Silent audio outputs. This is mainly a MIDI machine, but keeping audio outs
+    // makes it load nicely as an instrument in most plugin hosts.
+    output stream float outL;
+    output stream float outR;
+
+    input value float tempo [[ name: "Tempo", min: 50.0, max: 220.0, init: 120.0, unit: "BPM", rampFrames: 64 ]];
+    input value float chaos [[ name: "Chaos", min: 0.0, max: 100.0, init: 35.0, unit: "%", rampFrames: 64 ]];
+    input value float density [[ name: "Density", min: 0.0, max: 100.0, init: 78.0, unit: "%", rampFrames: 64 ]];
+    input value float gate [[ name: "Gate", min: 5.0, max: 95.0, init: 72.0, unit: "%", rampFrames: 64 ]];
+    input value int patternLength [[ name: "Steps", min: 8, max: 32, init: 16, step: 8, discrete: true ]];
+    input value int rootNote [[ name: "Root MIDI Note", min: 36, max: 72, init: 60, step: 1, discrete: true ]];
+    input value int scaleMode [[ name: "Scale", min: 0, max: 5, init: 1, step: 1, text: "Major|Minor|Pentatonic|Dorian|Phrygian|Harmonic Minor", discrete: true ]];
+    input value int octaveSpan [[ name: "Octave Span", min: 1, max: 4, init: 2, step: 1, discrete: true ]];
+    input value int transpose [[ name: "Transpose", min: -24, max: 24, init: 0, step: 1, discrete: true ]];
+    input value float swing [[ name: "Swing", min: 0.0, max: 65.0, init: 0.0, unit: "%", rampFrames: 64 ]];
+
+    // GUI command endpoints.
+    input event int generate;
+    input event int play;
+    input event int stop;
+    input event int randomSeed;
+    input event int setStepPacked;
+    input event int requestPatternDump;
+
+    int[32] stepNotes;
+    int[32] stepVelocity;
+    int[32] stepActive;
+
+    int seed = 1234567;
+    int isPlaying = 0;
+    int currentStep = 0;
+    int sampleCounter = 0;
+    int playingNote = -1;
+    int noteAgeFrames = 0;
+    int generatedOnce = 0;
+
+    int pendingGenerate = 0;
+    int pendingPlay = 0;
+    int pendingDump = 0;
+
+    event midiIn (std::midi::Message m)
+    {
+        // MIDI thru, so the plugin can sit before another instrument.
+        midiOut <- m;
+    }
+
+    event randomSeed (int v)
+    {
+        seed = max (1, v);
+    }
+
+    event generate (int v)
+    {
+        pendingGenerate = 1;
+    }
+
+    event play (int v)
+    {
+        if (v != 0)
+            pendingPlay = 1;
+    }
+
+    event stop (int v)
+    {
+        stopPlayingNote();
+        isPlaying = 0;
+        currentStep = 0;
+        sampleCounter = 0;
+        stepToUI <- packStepMessage (3, currentStep, 0, 0);
+    }
+
+    event requestPatternDump (int v)
+    {
+        pendingDump = 1;
+    }
+
+    event setStepPacked (int packed)
+    {
+        int step = (packed >> 16) & 255;
+        int note = (packed >> 8) & 255;
+        int active = packed & 255;
+
+        if (step >= 0 && step < 32)
+        {
+            stepNotes[wrap<32> (step)] = clamp (note, 0, 127);
+            stepVelocity[wrap<32> (step)] = max (1, stepVelocity[wrap<32> (step)]);
+            stepActive[wrap<32> (step)] = active != 0 ? 1 : 0;
+            stepToUI <- packStepMessage (2, step, stepNotes[wrap<32> (step)], stepActive[wrap<32> (step)]);
+        }
+    }
+
+    void main()
+    {
+        initialiseDefaultPattern();
+
+        loop
+        {
+            outL <- 0.0f;
+            outR <- 0.0f;
+
+            handlePendingGUICommands();
+
+            if (isPlaying != 0)
+            {
+                int framesThisStep = getFramesForCurrentStep();
+                int gateFrames = max (8, int (float (framesThisStep) * clamp (gate / 100.0f, 0.05f, 0.95f)));
+
+                if (playingNote >= 0)
+                {
+                    ++noteAgeFrames;
+                    if (noteAgeFrames >= gateFrames)
+                        stopPlayingNote();
+                }
+
+                ++sampleCounter;
+                if (sampleCounter >= framesThisStep)
+                {
+                    sampleCounter = 0;
+                    advanceStep();
+                    triggerCurrentStep();
+                }
+            }
+
+            advance();
+        }
+    }
+
+    void handlePendingGUICommands()
+    {
+        if (pendingGenerate != 0)
+        {
+            pendingGenerate = 0;
+            stopPlayingNote();
+            generatePattern();
+            currentStep = 0;
+            sampleCounter = 0;
+            noteAgeFrames = 0;
+            sendPatternDump();
+        }
+
+        if (pendingPlay != 0)
+        {
+            pendingPlay = 0;
+
+            if (generatedOnce == 0)
+            {
+                generatePattern();
+                sendPatternDump();
+            }
+
+            stopPlayingNote();
+            isPlaying = 1;
+            currentStep = 0;
+            sampleCounter = 0;
+            noteAgeFrames = 0;
+            triggerCurrentStep();
+        }
+
+        if (pendingDump != 0)
+        {
+            pendingDump = 0;
+            sendPatternDump();
+        }
+    }
+
+    void initialiseDefaultPattern()
+    {
+        for (wrap<32> i)
+        {
+            stepNotes[i] = degreeToNote (int (i) % 7);
+            stepVelocity[i] = 96;
+            stepActive[i] = int (i) < 16 ? 1 : 0;
+        }
+    }
+
+    int getUsableLength()
+    {
+        if (patternLength <= 8) return 8;
+        if (patternLength <= 16) return 16;
+        return 32;
+    }
+
+    int getFramesForCurrentStep()
+    {
+        float baseFrames = (float (processor.frequency) * 60.0f) / max (tempo, 1.0f) / 4.0f;
+
+        // Add swing to odd numbered sixteenth steps. This is deliberately simple
+        // and stable: odd steps become longer, even steps become slightly shorter.
+        float swingAmount = clamp (swing / 100.0f, 0.0f, 0.65f);
+        if ((currentStep & 1) != 0)
+            baseFrames *= 1.0f + swingAmount;
+        else
+            baseFrames *= 1.0f - (swingAmount * 0.5f);
+
+        return max (64, int (baseFrames));
+    }
+
+    void advanceStep()
+    {
+        int len = getUsableLength();
+        ++currentStep;
+        if (currentStep >= len)
+            currentStep = 0;
+    }
+
+    void triggerCurrentStep()
+    {
+        stopPlayingNote();
+        stepToUI <- packStepMessage (3, currentStep, 0, 0);
+
+        if (stepActive[wrap<32> (currentStep)] == 0)
+            return;
+
+        int note = clamp (stepNotes[wrap<32> (currentStep)] + transpose, 0, 127);
+        int vel = clamp (stepVelocity[wrap<32> (currentStep)], 1, 127);
+
+        std::midi::Message on = std::midi::createMessage (0x90, note, vel);
+        midiOut <- on;
+        midiToUI <- on;
+        playingNote = note;
+        noteAgeFrames = 0;
+    }
+
+    void stopPlayingNote()
+    {
+        if (playingNote >= 0)
+        {
+            std::midi::Message off = std::midi::createMessage (0x80, playingNote, 0);
+            midiOut <- off;
+            midiToUI <- off;
+            playingNote = -1;
+        }
+    }
+
+    void generatePattern()
+    {
+        generatedOnce = 1;
+        int len = getUsableLength();
+        float chaosNorm = clamp (chaos / 100.0f, 0.0f, 1.0f);
+        float densityNorm = clamp (density / 100.0f, 0.0f, 1.0f);
+
+        int degree = randomRange (-2, 3);
+        int lastStrongDegree = degree;
+
+        for (wrap<32> wi)
+        {
+            int i = int (wi);
+
+            if (i >= len)
+            {
+                stepActive[wi] = 0;
+                continue;
+            }
+
+            int strongBeat = ((i % 4) == 0) ? 1 : 0;
+            float r = rand01();
+            stepActive[wi] = (strongBeat != 0 || r < densityNorm) ? 1 : 0;
+
+            if (strongBeat != 0)
+            {
+                int anchorMove = randomRange (-1, 2);
+                lastStrongDegree += anchorMove;
+                degree = lastStrongDegree;
+            }
+            else
+            {
+                int maxJump = 1 + int (chaosNorm * 7.0f);
+                int move = randomRange (-maxJump, maxJump + 1);
+
+                // Low chaos prefers neighbour tones. High chaos allows wider jumps.
+                if (chaosNorm < 0.35f)
+                    move = clamp (move, -2, 2);
+
+                degree += move;
+            }
+
+            int spanDegrees = max (5, octaveSpan * 7);
+            while (degree > spanDegrees) degree -= 7;
+            while (degree < -spanDegrees) degree += 7;
+
+            stepNotes[wi] = clamp (degreeToNote (degree), 0, 127);
+            stepVelocity[wi] = clamp (72 + randomRange (0, 48), 1, 127);
+        }
+    }
+
+    int degreeToNote (int degree)
+    {
+        int scaleSize = scaleMode == 2 ? 5 : 7;
+        int octave = 0;
+
+        while (degree < 0)
+        {
+            degree += scaleSize;
+            --octave;
+        }
+
+        while (degree >= scaleSize)
+        {
+            degree -= scaleSize;
+            ++octave;
+        }
+
+        return rootNote + octave * 12 + getScaleInterval (degree);
+    }
+
+    int getScaleInterval (int index)
+    {
+        // Major: 0 2 4 5 7 9 11
+        if (scaleMode == 0)
+        {
+            if (index == 0) return 0; if (index == 1) return 2; if (index == 2) return 4;
+            if (index == 3) return 5; if (index == 4) return 7; if (index == 5) return 9;
+            return 11;
+        }
+
+        // Minor: 0 2 3 5 7 8 10
+        if (scaleMode == 1)
+        {
+            if (index == 0) return 0; if (index == 1) return 2; if (index == 2) return 3;
+            if (index == 3) return 5; if (index == 4) return 7; if (index == 5) return 8;
+            return 10;
+        }
+
+        // Pentatonic minor: 0 3 5 7 10
+        if (scaleMode == 2)
+        {
+            if (index == 0) return 0; if (index == 1) return 3; if (index == 2) return 5;
+            if (index == 3) return 7;
+            return 10;
+        }
+
+        // Dorian: 0 2 3 5 7 9 10
+        if (scaleMode == 3)
+        {
+            if (index == 0) return 0; if (index == 1) return 2; if (index == 2) return 3;
+            if (index == 3) return 5; if (index == 4) return 7; if (index == 5) return 9;
+            return 10;
+        }
+
+        // Phrygian: 0 1 3 5 7 8 10
+        if (scaleMode == 4)
+        {
+            if (index == 0) return 0; if (index == 1) return 1; if (index == 2) return 3;
+            if (index == 3) return 5; if (index == 4) return 7; if (index == 5) return 8;
+            return 10;
+        }
+
+        // Harmonic minor: 0 2 3 5 7 8 11
+        if (index == 0) return 0; if (index == 1) return 2; if (index == 2) return 3;
+        if (index == 3) return 5; if (index == 4) return 7; if (index == 5) return 8;
+        return 11;
+    }
+
+    void sendPatternDump()
+    {
+        for (wrap<32> i)
+            stepToUI <- packStepMessage (2, int (i), stepNotes[i], stepActive[i]);
+    }
+
+    int packStepMessage (int kind, int step, int note, int active)
+    {
+        return ((kind & 255) << 24) | ((step & 255) << 16) | ((note & 255) << 8) | (active & 255);
+    }
+
+    float rand01()
+    {
+        seed = seed * 1103515245 + 12345;
+        return float (seed & 0x7fffffff) / 2147483647.0f;
+    }
+
+    int randomRange (int minValue, int maxValueExclusive)
+    {
+        int range = max (1, maxValueExclusive - minValue);
+        return minValue + int (rand01() * float (range));
+    }
+}
