@@ -43,8 +43,8 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             -H "User-Agent: logical-chaos-build" \
-            https://api.github.com/repos/SoundStacks/cmajor/releases \
-            -o releases.json
+            https://api.github.com/repos/cmajor-lang/cmajor/releases
+
 
           echo "GitHub response preview:"
           head -c 500 releases.json
