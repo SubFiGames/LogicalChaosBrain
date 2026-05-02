@@ -30,40 +30,15 @@ jobs:
 
           New-Item -ItemType Directory -Force -Path tools/cmajor | Out-Null
 
-          $releaseApiUrl = "https://api.github.com/repos/cmajor-lang/cmajor/releases/tags/1.0.3096"
-          $headers = @{
-            'User-Agent' = 'github-actions'
-            'Accept'     = 'application/vnd.github.v3+json'
-          }
+          # The Windows release is a self-extracting EXE; use 7-Zip (pre-installed on runners) to unpack it
+          $exeUrl  = "https://github.com/cmajor-lang/cmajor/releases/download/1.0.3096/cmajor_win_x64.exe"
+          $exeFile = "cmajor_win_x64.exe"
 
-          Write-Host "Fetching release info for 1.0.3096..."
-          $release = Invoke-RestMethod -Uri $releaseApiUrl -Headers $headers
+          Write-Host "Downloading CMajor Windows installer..."
+          Invoke-WebRequest -Uri $exeUrl -OutFile $exeFile
 
-          Write-Host "Available assets:"
-          $release.assets | ForEach-Object { Write-Host "  $($_.name)" }
-
-          # Prefer an asset with 'windows' or 'win' in the name
-          $asset = $release.assets |
-            Where-Object { $_.name -match 'windows|win' } |
-            Select-Object -First 1
-
-          # Fallback: any zip that isn't macOS or Linux
-          if (-not $asset) {
-            $asset = $release.assets |
-              Where-Object { $_.name -match '\.zip$' -and $_.name -notmatch 'mac|linux' } |
-              Select-Object -First 1
-          }
-
-          if (-not $asset) {
-            Write-Error "No Windows asset found in release 1.0.3096"
-            exit 1
-          }
-
-          Write-Host "Downloading: $($asset.name)"
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "cmajor-windows.zip"
-
-          Write-Host "Extracting..."
-          Expand-Archive -Path "cmajor-windows.zip" -DestinationPath tools/cmajor -Force
+          Write-Host "Extracting with 7-Zip..."
+          & "C:\Program Files\7-Zip\7z.exe" x $exeFile "-otools\cmajor" -y
 
           Write-Host "Extracted contents:"
           Get-ChildItem -Path tools/cmajor -Recurse |
