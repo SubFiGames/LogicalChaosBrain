@@ -1,0 +1,177 @@
+name: Build Windows VST3
+
+'on':
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-vst3:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Clone JUCE
+        shell: bash
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
+
+      - name: Download Cmajor Windows tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          New-Item -ItemType Directory -Force -Path tools/cmajor | Out-Null
+
+          $releaseApiUrl = "https://api.github.com/repos/cmajor-lang/cmajor/releases/tags/1.0.3096"
+          $headers = @{
+            'User-Agent' = 'github-actions'
+            'Accept'     = 'application/vnd.github.v3+json'
+          }
+
+          Write-Host "Fetching release info for 1.0.3096..."
+          $release = Invoke-RestMethod -Uri $releaseApiUrl -Headers $headers
+
+          Write-Host "Available assets:"
+          $release.assets | ForEach-Object { Write-Host "  $($_.name)" }
+
+          # Prefer an asset with 'windows' or 'win' in the name
+          $asset = $release.assets |
+            Where-Object { $_.name -match 'windows|win' } |
+            Select-Object -First 1
+
+          # Fallback: any zip that isn't macOS or Linux
+          if (-not $asset) {
+            $asset = $release.assets |
+              Where-Object { $_.name -match '\.zip$' -and $_.name -notmatch 'mac|linux' } |
+              Select-Object -First 1
+          }
+
+          if (-not $asset) {
+            Write-Error "No Windows asset found in release 1.0.3096"
+            exit 1
+          }
+
+          Write-Host "Downloading: $($asset.name)"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "cmajor-windows.zip"
+
+          Write-Host "Extracting..."
+          Expand-Archive -Path "cmajor-windows.zip" -DestinationPath tools/cmajor -Force
+
+          Write-Host "Extracted contents:"
+          Get-ChildItem -Path tools/cmajor -Recurse |
+            Select-Object -First 100 |
+            ForEach-Object { Write-Host $_.FullName }
+
+      - name: Find cmaj executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $cmaj = Get-ChildItem -Path tools/cmajor -Recurse -Filter "cmaj.exe" |
+            Select-Object -First 1
+
+          if (-not $cmaj) {
+            Write-Error "Could not find cmaj.exe"
+            Get-ChildItem -Path tools/cmajor -Recurse | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+
+          Write-Host "Found cmaj at: $($cmaj.FullName)"
+          echo "CMAJ_PATH=$($cmaj.FullName)" >> $env:GITHUB_ENV
+
+          & $cmaj.FullName --help
+          Write-Host "cmaj found and ready."
+
+      - name: Validate required project files
+        shell: bash
+        run: |
+          set -e
+
+          echo "Repo files:"
+          find . -maxdepth 3 -type f | sort
+
+          test -f LogicalChaos.cmajorpatch
+          test -f Main.cmajor
+          test -f view.js
+
+      - name: Generate JUCE project from Cmajor patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $jucePath = Join-Path $env:GITHUB_WORKSPACE "tools\JUCE"
+
+          Write-Host "Running: cmaj generate --target=juce --output=GeneratedPlugin --jucePath=$jucePath LogicalChaos.cmajorpatch"
+
+          & $env:CMAJ_PATH generate `
+            --target=juce `
+            --output=GeneratedPlugin `
+            "--jucePath=$jucePath" `
+            LogicalChaos.cmajorpatch
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "cmaj generate failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+
+          Write-Host "Generated project:"
+          Get-ChildItem -Path GeneratedPlugin -Recurse |
+            Select-Object -First 200 |
+            ForEach-Object { Write-Host $_.FullName }
+
+      - name: Configure generated plugin
+        shell: bash
+        run: |
+          set -e
+
+          cmake \
+            -S GeneratedPlugin \
+            -B build \
+            -G "Visual Studio 17 2022" \
+            -A x64
+
+      - name: Build generated plugin
+        shell: bash
+        run: |
+          set -e
+
+          cmake --build build --config Release --parallel
+
+      - name: Collect VST3
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p artifact
+
+          echo "Searching for built VST3..."
+          find build -name "*.vst3" -print
+
+          VST3_PATH=$(find build -name "*.vst3" | head -1)
+
+          if [ -z "$VST3_PATH" ]; then
+            echo "No VST3 was built."
+            echo "Build folder contents:"
+            find build -maxdepth 6 -type f | head -300
+            exit 1
+          fi
+
+          echo "Found VST3: $VST3_PATH"
+          cp -R "$VST3_PATH" artifact/
+
+          echo "Artifact contents:"
+          find artifact -maxdepth 4 -print
+
+      - name: Upload VST3 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LogicalChaos-Windows-VST3
+          path: artifact
