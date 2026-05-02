@@ -24,44 +24,52 @@ jobs:
           $ErrorActionPreference = 'Stop'
           git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
 
-      - name: Download Cmajor Windows tools
+      - name: Download and extract Cmajor tools
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          
+          # 1. Setup paths
+          $zipUrl = "https://github.com/cmajor-lang/cmajor/releases/download/$env:CMAJOR_VERSION/cmajor_win_x64.zip"
+          $zipFile = "cmajor_tools.zip"
+          $extractDir = "$env:GITHUB_WORKSPACE\tools\cmajor"
+          
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
 
-          # Create the directory
-          New-Item -ItemType Directory -Force -Path tools/cmajor | Out-Null
+          # 2. Download the ZIP (not the .exe installer)
+          Write-Host "Downloading Cmajor ZIP from: $zipUrl"
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile
 
-          $exeUrl  = "https://github.com/cmajor-lang/cmajor/releases/download/$env:CMAJOR_VERSION/cmajor_win_x64.exe"
-          $destFile = "tools/cmajor/cmaj.exe"
+          # 3. Extract using native PowerShell
+          Write-Host "Extracting to $extractDir..."
+          Expand-Archive -Path $zipFile -DestinationPath $extractDir -Force
 
-          Write-Host "Downloading Cmajor binary from: $exeUrl"
-          Invoke-WebRequest -Uri $exeUrl -OutFile $destFile
+          # 4. Find the actual cmaj.exe (it's usually in a subfolder like 'bin' or 'cmajor')
+          $cmaj = Get-ChildItem -Path $extractDir -Recurse -Filter "cmaj.exe" | Select-Object -First 1
 
-          if (-not (Test-Path $destFile)) {
-            Write-Error "Cmajor binary was not downloaded."
+          if (-not $cmaj) {
+            Write-Error "Could not find cmaj.exe inside the extracted ZIP."
+            Get-ChildItem -Path $extractDir -Recurse | ForEach-Object { Write-Host $_.FullName }
             exit 1
           }
 
-          Write-Host "Downloaded and moved to: $destFile"
+          # 5. Set environment variables for later steps
+          $cmajPath = $cmaj.FullName
+          $cmajDir = $cmaj.DirectoryName
           
-          # Set Environment Variables for subsequent steps
-          "CMAJ_PATH=$(Get-Item $destFile | Select-Object -ExpandProperty FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "CMAJ_DIR=$(Get-Item tools/cmajor | Select-Object -ExpandProperty FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Found cmaj.exe at: $cmajPath"
+          "CMAJ_PATH=$cmajPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CMAJ_DIR=$cmajDir"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Verify cmaj executable
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # Add the directory to PATH so cmaj can find its DLLs (like CmajPerformer.dll)
+          $env:PATH = "$env:CMAJ_DIR;" + $env:PATH
           
-          Write-Host "Checking cmaj.exe at: $env:CMAJ_PATH"
+          Write-Host "Testing cmaj help..."
           & "$env:CMAJ_PATH" help
-
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "cmaj execution failed."
-            exit 1
-          }
-          Write-Host "cmaj is ready."
           
       - name: Validate required project files
         shell: pwsh
