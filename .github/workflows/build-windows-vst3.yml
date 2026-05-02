@@ -24,111 +24,45 @@ jobs:
           $ErrorActionPreference = 'Stop'
           git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
 
-      - name: Download and extract Cmajor Windows tools
+      - name: Download Cmajor Windows tools
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
+          # Create the directory
           New-Item -ItemType Directory -Force -Path tools/cmajor | Out-Null
 
           $exeUrl  = "https://github.com/cmajor-lang/cmajor/releases/download/$env:CMAJOR_VERSION/cmajor_win_x64.exe"
-          $exeFile = "cmajor_win_x64.exe"
+          $destFile = "tools/cmajor/cmaj.exe"
 
-          Write-Host "Downloading Cmajor from:"
-          Write-Host $exeUrl
+          Write-Host "Downloading Cmajor binary from: $exeUrl"
+          Invoke-WebRequest -Uri $exeUrl -OutFile $destFile
 
-          Invoke-WebRequest -Uri $exeUrl -OutFile $exeFile
-
-          if (-not (Test-Path $exeFile)) {
-            Write-Error "Cmajor installer was not downloaded."
+          if (-not (Test-Path $destFile)) {
+            Write-Error "Cmajor binary was not downloaded."
             exit 1
           }
 
-          Write-Host "Downloaded file:"
-          Get-Item $exeFile | Format-List FullName,Length
+          Write-Host "Downloaded and moved to: $destFile"
+          
+          # Set Environment Variables for subsequent steps
+          "CMAJ_PATH=$(Get-Item $destFile | Select-Object -ExpandProperty FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CMAJ_DIR=$(Get-Item tools/cmajor | Select-Object -ExpandProperty FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          $sevenZip = $null
-
-          $possible7zPaths = @(
-            "C:\Program Files\7-Zip\7z.exe",
-            "C:\Program Files (x86)\7-Zip\7z.exe"
-          )
-
-          foreach ($path in $possible7zPaths) {
-            if (Test-Path $path) {
-              $sevenZip = $path
-              break
-            }
-          }
-
-          if (-not $sevenZip) {
-            $where7z = where.exe 7z 2>$null
-            if ($LASTEXITCODE -eq 0 -and $where7z) {
-              $sevenZip = $where7z[0]
-            }
-          }
-
-          if (-not $sevenZip) {
-            Write-Host "7-Zip was not found. Installing 7-Zip with Chocolatey..."
-            choco install 7zip -y --no-progress
-
-            $where7z = where.exe 7z 2>$null
-            if ($LASTEXITCODE -eq 0 -and $where7z) {
-              $sevenZip = $where7z[0]
-            }
-          }
-
-          if (-not $sevenZip) {
-            Write-Error "Could not find or install 7-Zip."
-            exit 1
-          }
-
-          Write-Host "Using 7-Zip:"
-          Write-Host $sevenZip
-
-          & $sevenZip x $exeFile "-otools\cmajor" -y
-
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "7-Zip extraction failed with exit code $LASTEXITCODE"
-            exit 1
-          }
-
-          Write-Host "Extracted Cmajor contents:"
-          Get-ChildItem -Path tools/cmajor -Recurse |
-            Select-Object -First 200 |
-            ForEach-Object { Write-Host $_.FullName }
-
-      - name: Find cmaj executable
+      - name: Verify cmaj executable
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
-          $cmaj = Get-ChildItem -Path tools/cmajor -Recurse -Filter "cmaj.exe" |
-            Select-Object -First 1
-
-          if (-not $cmaj) {
-            Write-Error "Could not find cmaj.exe after extraction."
-            Write-Host "Full extracted folder listing:"
-            Get-ChildItem -Path tools/cmajor -Recurse |
-              ForEach-Object { Write-Host $_.FullName }
-            exit 1
-          }
-
-          Write-Host "Found cmaj.exe at:"
-          Write-Host $cmaj.FullName
-
-          "CMAJ_PATH=$($cmaj.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "CMAJ_DIR=$($cmaj.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-          & $cmaj.FullName help
+          
+          Write-Host "Checking cmaj.exe at: $env:CMAJ_PATH"
+          & "$env:CMAJ_PATH" help
 
           if ($LASTEXITCODE -ne 0) {
-            Write-Error "cmaj help failed with exit code $LASTEXITCODE"
+            Write-Error "cmaj execution failed."
             exit 1
           }
-
           Write-Host "cmaj is ready."
-
+          
       - name: Validate required project files
         shell: pwsh
         run: |
