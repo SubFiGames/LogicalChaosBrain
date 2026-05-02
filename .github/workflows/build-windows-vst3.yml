@@ -24,52 +24,61 @@ jobs:
           $ErrorActionPreference = 'Stop'
           git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
 
-      - name: Download and extract Cmajor tools
+      - name: Download and Install Cmajor
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          
-          # 1. Setup paths
-          $zipUrl = "https://github.com/cmajor-lang/cmajor/releases/download/$env:CMAJOR_VERSION/cmajor_win_x64.zip"
-          $zipFile = "cmajor_tools.zip"
-          $extractDir = "$env:GITHUB_WORKSPACE\tools\cmajor"
-          
-          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
 
-          # 2. Download the ZIP (not the .exe installer)
-          Write-Host "Downloading Cmajor ZIP from: $zipUrl"
-          Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile
+          $exeUrl = "https://github.com/cmajor-lang/cmajor/releases/download/$env:CMAJOR_VERSION/cmajor_win_x64.exe"
+          $installer = "cmajor_installer.exe"
+          $installDir = "$env:GITHUB_WORKSPACE\tools\cmajor"
 
-          # 3. Extract using native PowerShell
-          Write-Host "Extracting to $extractDir..."
-          Expand-Archive -Path $zipFile -DestinationPath $extractDir -Force
+          Write-Host "Downloading Cmajor installer from: $exeUrl"
+          Invoke-WebRequest -Uri $exeUrl -OutFile $installer
 
-          # 4. Find the actual cmaj.exe (it's usually in a subfolder like 'bin' or 'cmajor')
-          $cmaj = Get-ChildItem -Path $extractDir -Recurse -Filter "cmaj.exe" | Select-Object -First 1
-
-          if (-not $cmaj) {
-            Write-Error "Could not find cmaj.exe inside the extracted ZIP."
-            Get-ChildItem -Path $extractDir -Recurse | ForEach-Object { Write-Host $_.FullName }
+          if (-not (Test-Path $installer)) {
+            Write-Error "Installer failed to download."
             exit 1
           }
 
-          # 5. Set environment variables for later steps
-          $cmajPath = $cmaj.FullName
-          $cmajDir = $cmaj.DirectoryName
+          Write-Host "Running Cmajor silent installation to $installDir..."
+          # Run the Inno Setup installer silently
+          $process = Start-Process -FilePath ".\$installer" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /DIR=`"$installDir`"" -Wait -PassThru
+
+          if ($process.ExitCode -ne 0) {
+            Write-Warning "Installer exited with code $($process.ExitCode). Checking for files anyway..."
+          }
+
+          # Wait a moment for file locks to release
+          Start-Sleep -Seconds 2
+
+          $cmaj = Get-ChildItem -Path $installDir -Recurse -Filter "cmaj.exe" | Select-Object -First 1
+
+          if (-not $cmaj) {
+            Write-Error "Could not find cmaj.exe after silent installation."
+            Get-ChildItem -Path $installDir -Recurse | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+
+          Write-Host "Successfully installed! Found cmaj.exe at: $($cmaj.FullName)"
           
-          Write-Host "Found cmaj.exe at: $cmajPath"
-          "CMAJ_PATH=$cmajPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "CMAJ_DIR=$cmajDir"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CMAJ_PATH=$($cmaj.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CMAJ_DIR=$($cmaj.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Verify cmaj executable
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Add the directory to PATH so cmaj can find its DLLs (like CmajPerformer.dll)
+          # Add the installation folder to PATH so the compiler can locate its DLLs
           $env:PATH = "$env:CMAJ_DIR;" + $env:PATH
           
           Write-Host "Testing cmaj help..."
           & "$env:CMAJ_PATH" help
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "cmaj execution failed."
+            exit 1
+          }
           
       - name: Validate required project files
         shell: pwsh
