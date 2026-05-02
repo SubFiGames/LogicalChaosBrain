@@ -23,39 +23,60 @@ jobs:
           set -e
           git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
 
-      - name: Download Cmajor Windows tools
+      - name: Install Cmajor Windows tools
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          New-Item -ItemType Directory -Force -Path tools/cmajor | Out-Null
-
-          # The Windows release is a self-extracting EXE; use 7-Zip (pre-installed on runners) to unpack it
-          $exeUrl  = "https://github.com/cmajor-lang/cmajor/releases/download/1.0.3096/cmajor_win_x64.exe"
-          $exeFile = "cmajor_win_x64.exe"
+          $exeUrl    = "https://github.com/cmajor-lang/cmajor/releases/download/1.0.3096/cmajor_win_x64.exe"
+          $exeFile   = "$env:GITHUB_WORKSPACE\cmajor_win_x64.exe"
+          $installTo = "C:\cmajor"
 
           Write-Host "Downloading CMajor Windows installer..."
           Invoke-WebRequest -Uri $exeUrl -OutFile $exeFile
 
-          Write-Host "Extracting with 7-Zip..."
-          & "C:\Program Files\7-Zip\7z.exe" x $exeFile "-otools\cmajor" -y
+          # Run NSIS silent install (/S = silent, /D = install directory)
+          Write-Host "Running silent installer to $installTo ..."
+          $proc = Start-Process -FilePath $exeFile `
+            -ArgumentList "/S", "/D=$installTo" `
+            -Wait -PassThru -NoNewWindow
+          Write-Host "Installer exit code: $($proc.ExitCode)"
 
-          Write-Host "Extracted contents:"
-          Get-ChildItem -Path tools/cmajor -Recurse |
-            Select-Object -First 100 |
-            ForEach-Object { Write-Host $_.FullName }
+          # If the installer put files somewhere else, search common locations
+          $searchRoots = @($installTo, "C:\Program Files\Cmajor", "C:\Program Files (x86)\Cmajor")
+          $found = $false
+          foreach ($root in $searchRoots) {
+            if (Test-Path $root) {
+              Write-Host "Found install at: $root"
+              Get-ChildItem -Path $root -Recurse | ForEach-Object { Write-Host $_.FullName }
+              $found = $true
+              break
+            }
+          }
+
+          if (-not $found) {
+            # Fallback: extract with 7-Zip
+            Write-Host "Silent install didn't find output; falling back to 7-Zip extraction..."
+            New-Item -ItemType Directory -Force -Path $installTo | Out-Null
+            & "C:\Program Files\7-Zip\7z.exe" x $exeFile "-o$installTo" -y
+            Write-Host "7-Zip extracted contents:"
+            Get-ChildItem -Path $installTo -Recurse | ForEach-Object { Write-Host $_.FullName }
+          }
+
+          # Expose install root for the next step
+          echo "CMAJOR_INSTALL=$installTo" >> $env:GITHUB_ENV
 
       - name: Find cmaj executable
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $cmaj = Get-ChildItem -Path tools/cmajor -Recurse -Filter "cmaj.exe" |
+          $cmaj = Get-ChildItem -Path $env:CMAJOR_INSTALL -Recurse -Filter "cmaj.exe" |
             Select-Object -First 1
 
           if (-not $cmaj) {
-            Write-Error "Could not find cmaj.exe"
-            Get-ChildItem -Path tools/cmajor -Recurse | ForEach-Object { Write-Host $_.FullName }
+            Write-Error "Could not find cmaj.exe under $env:CMAJOR_INSTALL"
+            Get-ChildItem -Path $env:CMAJOR_INSTALL -Recurse | ForEach-Object { Write-Host $_.FullName }
             exit 1
           }
 
