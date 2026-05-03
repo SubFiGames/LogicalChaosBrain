@@ -35,39 +35,26 @@ jobs:
           set -euo pipefail
           mkdir -p tools/cmajor
 
-          archive_file="cmajor_linux_tools.tar.gz"
-          candidate_urls=(
-            "https://github.com/cmajor-lang/cmajor/releases/download/${CMAJOR_VERSION}/cmajor_linux_x64.tar.gz"
-            "https://github.com/cmajor-lang/cmajor/releases/download/${CMAJOR_VERSION}/cmajor-linux-x64.tar.gz"
-            "https://github.com/cmajor-lang/cmajor/releases/download/${CMAJOR_VERSION}/cmajor_linux.tar.gz"
-          )
+          # The Linux release asset for 1.0.3096 is a ZIP named cmajor.linux.x64.zip
+          archive_url="https://github.com/cmajor-lang/cmajor/releases/download/${CMAJOR_VERSION}/cmajor.linux.x64.zip"
+          archive_file="cmajor_linux_tools.zip"
 
-          downloaded="false"
-          for archive_url in "${candidate_urls[@]}"; do
-            echo "Attempting Cmajor download: ${archive_url}"
-            if curl -fL "${archive_url}" -o "${archive_file}"; then
-              downloaded="true"
-              break
-            fi
-          done
+          echo "Downloading Cmajor Linux tools: ${archive_url}"
+          curl -fL "${archive_url}" -o "${archive_file}"
 
-          if [ "${downloaded}" != "true" ]; then
-            echo "Failed to download Cmajor Linux tools for version ${CMAJOR_VERSION}." >&2
-            echo "Tried URLs:" >&2
-            printf '  - %s\n' "${candidate_urls[@]}" >&2
-            exit 1
-          fi
-
-          tar -xzf "${archive_file}" -C tools/cmajor
+          echo "Extracting..."
+          unzip -q "${archive_file}" -d tools/cmajor
 
           cmaj_path="$(find "${GITHUB_WORKSPACE}/tools/cmajor" -type f -name cmaj | head -n 1)"
           if [ -z "${cmaj_path}" ]; then
             echo "Could not find cmaj executable after extraction" >&2
+            find tools/cmajor -maxdepth 5 | head -50
             exit 1
           fi
 
           chmod +x "${cmaj_path}"
           echo "CMAJ_PATH=${cmaj_path}" >> "$GITHUB_ENV"
+          echo "Found cmaj at: ${cmaj_path}"
 
       - name: Generate JUCE project for Android
         shell: bash
@@ -85,11 +72,6 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - name: Collect and Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: LogicalChaos-Android-Debug
-          path: GeneratedAndroidApp/Builds/Android/app/build/outputs/apk/debug/*.apk
       - name: Collect and Upload APK
         uses: actions/upload-artifact@v4
         with:
