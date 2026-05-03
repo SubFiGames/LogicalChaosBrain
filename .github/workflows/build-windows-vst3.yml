@@ -18,11 +18,24 @@ jobs:
       - name: Checkout project
         uses: actions/checkout@v5
 
-      - name: Clone JUCE
+      - name: Generate JUCE project from Cmajor patch
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
+          $jucePath = Join-Path $env:GITHUB_WORKSPACE "tools\JUCE"
+
+          # 1. Generate the project
+          & $env:CMAJ_PATH generate `
+            --target=juce `
+            --output=GeneratedPlugin `
+            "--jucePath=$jucePath" `
+            LogicalChaos.cmajorpatch
+
+          # 2. CRITICAL FIX: Copy your source files INTO the generated folder 
+          # so JUCE can bundle them into the VST3 Resources.
+          Copy-Item "LogicalChaos.cmajorpatch" "GeneratedPlugin/Source/"
+          Copy-Item "Main.cmajor" "GeneratedPlugin/Source/"
+          Copy-Item "view.js" "GeneratedPlugin/Source/"
 
       - name: Download and Install Cmajor
         shell: pwsh
