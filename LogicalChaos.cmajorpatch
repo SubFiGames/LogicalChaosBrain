@@ -2,12 +2,15 @@
     "CmajorVersion": 1,
     "ID": "com.subfigames.logicalchaos.melodymachine",
     "name": "Logical Chaos Melody Machine",
-    "description": "A controllable random melody and step sequencer with chaos, glide and random-note steps for creating beautiful or crazy MIDI melodies.",
+    "description": "A controllable random melody and step sequencer with a built-in subtractive synthesizer.",
     "category": "Instrument",
     "manufacturer": "SubFi Games",
-    "version": "3.0.0",
+    "version": "4.0.0",
     "mainProcessor": "MainProcessor",
     "source": "Main.cmajor",
+    "dependencies": {
+        "std": "std"
+    },
     "view": {
         "src": "view.js",
         "width": 1500,
