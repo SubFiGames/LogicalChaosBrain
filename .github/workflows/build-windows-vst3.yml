@@ -31,13 +31,7 @@ jobs:
             "--jucePath=$jucePath" `
             LogicalChaos.cmajorpatch
 
-          # 2. CRITICAL FIX: Copy your source files INTO the generated folder 
-          # so JUCE can bundle them into the VST3 Resources.
-          Copy-Item "LogicalChaos.cmajorpatch" "GeneratedPlugin/Source/"
-          Copy-Item "Main.cmajor" "GeneratedPlugin/Source/"
-          Copy-Item "view.js" "GeneratedPlugin/Source/"
-
-      - name: Download and Install Cmajor
+      - name: Install Cmajor Windows tools
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
