@@ -11,22 +11,66 @@ permissions:
   contents: read
 
 jobs:
-  build-android:
-    # ubuntu-latest is 24.04 which dropped libwebkit2gtk-4.0 that cmaj requires;
-    # pin to 22.04 where it is still available
-    runs-on: ubuntu-22.04
+  # ── Job 1: generate the JUCE CMake project on macOS ──────────────────────
+  # cmaj uses Apple's native WebKit on macOS so it runs headlessly without
+  # any display setup. On Linux it uses WebKit2GTK which requires a real
+  # rendering event loop and hangs in every headless configuration.
+  generate-juce-project:
+    runs-on: macos-latest
 
     steps:
       - name: Checkout project
         uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Download Cmajor macOS tools
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y \
-            libwebkit2gtk-4.0-dev \
-            at-spi2-core \
-            dbus-x11
+          set -e
+          mkdir -p tools/cmajor
+
+          curl -L \
+            "https://github.com/cmajor-lang/cmajor/releases/download/${CMAJOR_VERSION}/cmajor.dmg" \
+            -o cmajor.dmg
+
+          hdiutil attach cmajor.dmg -mountpoint /Volumes/cmajor-install -nobrowse
+          cp -R /Volumes/cmajor-install/* tools/cmajor/
+          hdiutil detach /Volumes/cmajor-install
+
+          CMAJ=$(find tools/cmajor -type f -name "cmaj" | head -1)
+          chmod +x "$CMAJ"
+          echo "CMAJ_PATH=$CMAJ" >> "$GITHUB_ENV"
+
+      - name: Clone JUCE
+        run: git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
+
+      - name: Generate JUCE project
+        run: |
+          set -e
+          "$CMAJ_PATH" generate \
+            --target=juce \
+            --output=GeneratedAndroidApp \
+            --jucePath="$GITHUB_WORKSPACE/tools/JUCE" \
+            LogicalChaos.cmajorpatch
+
+          echo "Generated project structure:"
+          find GeneratedAndroidApp -type f | sort
+
+      - name: Upload generated JUCE project
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeneratedJuceProject
+          path: GeneratedAndroidApp
+
+  # ── Job 2: compile for Android on Linux using the generated CMake project ─
+  build-android:
+    needs: generate-juce-project
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Download generated JUCE project
+        uses: actions/download-artifact@v4
+        with:
+          name: GeneratedJuceProject
+          path: GeneratedAndroidApp
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -37,55 +81,39 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v2
 
-      - name: Clone JUCE
-        run: git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
-
-      - name: Download and extract Cmajor Linux tools
+      - name: Install Android NDK
         run: |
-          set -euo pipefail
-          mkdir -p tools/cmajor
+          sdkmanager --install "ndk;25.2.9519653"
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> "$GITHUB_ENV"
 
-          # The Linux release asset for 1.0.3096 is a ZIP named cmajor.linux.x64.zip
-          archive_url="https://github.com/cmajor-lang/cmajor/releases/download/${CMAJOR_VERSION}/cmajor.linux.x64.zip"
-          archive_file="cmajor_linux_tools.zip"
-
-          echo "Downloading Cmajor Linux tools: ${archive_url}"
-          curl -fL "${archive_url}" -o "${archive_file}"
-
-          echo "Extracting..."
-          unzip -q "${archive_file}" -d tools/cmajor
-
-          cmaj_path="$(find "${GITHUB_WORKSPACE}/tools/cmajor" -type f -name cmaj | head -n 1)"
-          if [ -z "${cmaj_path}" ]; then
-            echo "Could not find cmaj executable after extraction" >&2
-            find tools/cmajor -maxdepth 5 | head -50
-            exit 1
-          fi
-
-          chmod +x "${cmaj_path}"
-          echo "CMAJ_PATH=${cmaj_path}" >> "$GITHUB_ENV"
-          echo "Found cmaj at: ${cmaj_path}"
-
-      - name: Generate JUCE project for Android
-        shell: bash
+      - name: Show generated project structure
         run: |
-          set -euo pipefail
-          # GDK_BACKEND=offscreen tells GTK to render into memory rather than
-          # connecting to an X server, so cmaj never blocks on a display event loop
-          GDK_BACKEND=offscreen "$CMAJ_PATH" generate \
-            --target=juce \
-            --output=GeneratedAndroidApp \
-            --jucePath="$GITHUB_WORKSPACE/tools/JUCE" \
-            LogicalChaos.cmajorpatch
+          echo "Contents of GeneratedAndroidApp:"
+          find GeneratedAndroidApp -type f | sort
 
-      - name: Build Android APK with Gradle
+      - name: Configure with CMake for Android
         run: |
-          cd GeneratedAndroidApp/Builds/Android
-          chmod +x gradlew
-          ./gradlew assembleDebug
+          cmake \
+            -S GeneratedAndroidApp \
+            -B build-android \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_BUILD_TYPE=Release
 
-      - name: Collect and Upload APK
+      - name: Build Android native library
+        run: cmake --build build-android --parallel
+
+      - name: Collect build output
+        run: |
+          mkdir -p artifact
+          find build-android -name "*.so" -o -name "*.apk" | sort
+          find build-android \( -name "*.so" -o -name "*.apk" \) -exec cp {} artifact/ \;
+          echo "Artifact contents:"
+          ls -lh artifact/
+
+      - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LogicalChaos-Android-Debug
-          path: GeneratedAndroidApp/Builds/Android/app/build/outputs/apk/debug/*.apk
+          name: LogicalChaos-Android
+          path: artifact
