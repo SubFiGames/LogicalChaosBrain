@@ -23,7 +23,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y libwebkit2gtk-4.0-dev
+          sudo apt-get install -y libwebkit2gtk-4.0-dev xvfb
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -67,7 +67,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$CMAJ_PATH" generate \
+          # xvfb-run provides a virtual display so cmaj's GTK/WebKit layer
+          # can initialise without hanging on a headless runner
+          xvfb-run "$CMAJ_PATH" generate \
             --target=juce \
             --output=GeneratedAndroidApp \
             --jucePath="$GITHUB_WORKSPACE/tools/JUCE" \
