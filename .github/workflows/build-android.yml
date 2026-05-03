@@ -11,10 +11,9 @@ permissions:
   contents: read
 
 jobs:
-  # ── Job 1: generate the JUCE CMake project on macOS ──────────────────────
-  # cmaj uses Apple's native WebKit on macOS so it runs headlessly without
-  # any display setup. On Linux it uses WebKit2GTK which requires a real
-  # rendering event loop and hangs in every headless configuration.
+  # Job 1: generate the JUCE CMake project on macOS
+  # cmaj uses Apple's native WebKit on macOS so it runs headlessly.
+  # On Linux it uses WebKit2GTK which hangs in every headless configuration.
   generate-juce-project:
     runs-on: macos-latest
 
@@ -35,9 +34,19 @@ jobs:
           cp -R /Volumes/cmajor-install/* tools/cmajor/
           hdiutil detach /Volumes/cmajor-install
 
+          echo "--- tools/cmajor contents ---"
+          find tools/cmajor -maxdepth 5 | sort
+
           CMAJ=$(find tools/cmajor -type f -name "cmaj" | head -1)
+          if [ -z "$CMAJ" ]; then
+            echo "ERROR: cmaj binary not found after extracting DMG"
+            exit 1
+          fi
+
           chmod +x "$CMAJ"
           echo "CMAJ_PATH=$CMAJ" >> "$GITHUB_ENV"
+          echo "Found cmaj at: $CMAJ"
+          "$CMAJ" --version || true
 
       - name: Clone JUCE
         run: git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
@@ -45,13 +54,28 @@ jobs:
       - name: Generate JUCE project
         run: |
           set -e
+          echo "Running: $CMAJ_PATH generate --target=juce"
+          echo "JUCE path: $GITHUB_WORKSPACE/tools/JUCE"
+          echo "Patch file:"
+          cat LogicalChaos.cmajorpatch
+
+          # Capture all output so the error is visible in the step log
+          set +e
           "$CMAJ_PATH" generate \
             --target=juce \
             --output=GeneratedAndroidApp \
             --jucePath="$GITHUB_WORKSPACE/tools/JUCE" \
-            LogicalChaos.cmajorpatch
+            LogicalChaos.cmajorpatch 2>&1
+          EXIT_CODE=$?
+          set -e
 
-          echo "Generated project structure:"
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo ""
+            echo "ERROR: cmaj generate failed with exit code $EXIT_CODE"
+            exit $EXIT_CODE
+          fi
+
+          echo "--- Generated project structure ---"
           find GeneratedAndroidApp -type f | sort
 
       - name: Upload generated JUCE project
@@ -60,7 +84,7 @@ jobs:
           name: GeneratedJuceProject
           path: GeneratedAndroidApp
 
-  # ── Job 2: compile for Android on Linux using the generated CMake project ─
+  # Job 2: compile for Android on Linux using the generated CMake project
   build-android:
     needs: generate-juce-project
     runs-on: ubuntu-22.04
@@ -107,7 +131,6 @@ jobs:
       - name: Collect build output
         run: |
           mkdir -p artifact
-          find build-android -name "*.so" -o -name "*.apk" | sort
           find build-android \( -name "*.so" -o -name "*.apk" \) -exec cp {} artifact/ \;
           echo "Artifact contents:"
           ls -lh artifact/
