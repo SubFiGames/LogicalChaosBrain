@@ -1,103 +1,160 @@
-name: Build Android App
+name: Build macOS VST3
 
-on:
+'on':
   workflow_dispatch:
 
 env:
-  # Check the Cmajor GitHub releases to ensure this version exists!
-  CMAJOR_VERSION: 1.0.3096
-  JAVA_VERSION: '17'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: read
 
 jobs:
-  build-android:
-    runs-on: ubuntu-latest
+  build-macos-vst3:
+    runs-on: macos-latest
 
     steps:
       - name: Checkout project
         uses: actions/checkout@v4
 
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          java-version: ${{ env.JAVA_VERSION }}
-          distribution: 'temurin'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Install build tools
+        shell: bash
+        run: |
+          set -e
+          brew install cmake ninja jq || true
 
       - name: Clone JUCE
+        shell: bash
         run: |
+          set -e
           git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
 
-                  - name: Download and extract Cmajor Windows tools
-        shell: pwsh
+      - name: Download Cmajor macOS tools
+        shell: bash
         run: |
-          $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force -Path tools/cmajor | Out-Null
+          set -e
 
-          # Download
-          $exeUrl  = "https://github.com/cmajor-lang/cmajor/releases/download/$env:CMAJOR_VERSION/cmajor_win_x64.exe"
-          $exeFile = "cmajor_win_x64.exe"
-          Write-Host "Downloading Cmajor Windows tools from: $exeUrl"
-          Invoke-WebRequest -Uri $exeUrl -OutFile $exeFile
+          mkdir -p tools/cmajor
 
-          if (-not (Test-Path $exeFile)) {
-            Write-Error "Cmajor download failed."
+          echo "Downloading Cmajor macOS DMG..."
+
+          DMG_URL="https://github.com/cmajor-lang/cmajor/releases/download/1.0.3096/cmajor.dmg"
+          DMG_FILE="cmajor-mac.dmg"
+          EXPECTED_SHA256="113bd1d487530b97d4eb5a740da562c3cee1066444f5fb66e8a8fdec64422c21"
+
+          curl -L "$DMG_URL" -o "$DMG_FILE"
+
+          ACTUAL_SHA256=$(shasum -a 256 "$DMG_FILE" | awk '{print $1}')
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "SHA256 mismatch!"
+            echo "Expected: $EXPECTED_SHA256"
+            echo "Actual:   $ACTUAL_SHA256"
             exit 1
-          }
+          fi
 
-          # Find 7-Zip
-          $sevenZip = $null
-          $possible7ZipPaths = @("C:\Program Files\7-Zip\7z.exe", "C:\Program Files (x86)\7-Zip\7z.exe")
-          foreach ($path in $possible7ZipPaths) { if (Test-Path $path) { $sevenZip = $path; break } }
-          
-          if (-not $sevenZip) {
-            Write-Host "Installing 7-Zip via Chocolatey..."
-            choco install 7zip -y --no-progress
-            $sevenZip = (where.exe 7z 2>$null)[0]
-          }
+          echo "SHA256 verified successfully"
+          echo "Mounting and extracting DMG..."
 
-          if (-not $sevenZip) { Write-Error "Could not find 7-Zip"; exit 1 }
+          hdiutil attach "$DMG_FILE" -mountpoint /Volumes/cmajor-install -nobrowse
+          cp -R /Volumes/cmajor-install/* tools/cmajor/
+          hdiutil detach /Volumes/cmajor-install
 
-          # Extract
-          Write-Host "Extracting Cmajor tools using $sevenZip..."
-          & $sevenZip x $exeFile "-otools\cmajor" -y
-          
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Extraction failed. Exit code: $LASTEXITCODE"
-            exit 1
-          }
+          echo "Cmajor files:"
+          find tools/cmajor -maxdepth 5 -type f | head -150
 
-
-      - name: Generate JUCE project for Android
+      - name: Find cmaj executable
+        shell: bash
         run: |
-          # Use the environment variable we just saved
-          $CMAJ_PATH generate \
+          set -e
+
+          CMAJ_PATH=$(find tools/cmajor -type f -name "cmaj" | head -1)
+
+          if [ -z "$CMAJ_PATH" ]; then
+            echo "Could not find cmaj executable."
+            find tools/cmajor -maxdepth 6 -type f
+            exit 1
+          fi
+
+          chmod +x "$CMAJ_PATH"
+          echo "CMAJ_PATH=$CMAJ_PATH" >> "$GITHUB_ENV"
+
+          echo "Using cmaj at: $CMAJ_PATH"
+          "$CMAJ_PATH" --help || true
+
+      - name: Validate required project files
+        shell: bash
+        run: |
+          set -e
+
+          echo "Repo files:"
+          find . -maxdepth 3 -type f | sort
+
+          test -f LogicalChaos.cmajorpatch
+          test -f Main.cmajor
+          test -f view.js
+
+      - name: Generate JUCE project from Cmajor patch
+        shell: bash
+        run: |
+          set -e
+
+          "$CMAJ_PATH" generate \
             --target=juce \
-            --output=GeneratedAndroidApp \
-            --jucePath=$GITHUB_WORKSPACE/tools/JUCE \
+            --output=GeneratedPlugin \
+            --jucePath="$GITHUB_WORKSPACE/tools/JUCE" \
             LogicalChaos.cmajorpatch
 
-      - name: Build Android APK with Gradle
+          echo "Generated project:"
+          find GeneratedPlugin -maxdepth 5 -type f | head -200
+
+      - name: Configure generated plugin
+        shell: bash
         run: |
-          # Cmajor creates the Android build files inside this specific subfolder
-          cd GeneratedAndroidApp/Builds/Android
-          chmod +x gradlew
-          ./gradlew assembleDebug
+          set -e
 
+          cmake \
+            -S GeneratedPlugin \
+            -B build \
+            -G Xcode \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
 
-      - name: Build Android APK with Gradle
+      - name: Build generated plugin
+        shell: bash
         run: |
-          # The cmaj generator creates a 'Builds/Android' subfolder
-          cd GeneratedAndroidApp/Builds/Android
-          chmod +x gradlew
-          ./gradlew assembleDebug
+          set -e
 
-      - name: Collect and Upload APK
+          cmake --build build --config Release --parallel
+
+      - name: Collect VST3
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p artifact
+
+          echo "Searching for built VST3..."
+          find build -name "*.vst3" -print
+
+          VST3_PATH=$(find build -name "*.vst3" | head -1)
+
+          if [ -z "$VST3_PATH" ]; then
+            echo "No VST3 was built."
+            find build -maxdepth 6 -type f | head -300
+            exit 1
+          fi
+
+          echo "Found VST3: $VST3_PATH"
+          cp -R "$VST3_PATH" artifact/
+
+          echo "Ad-hoc signing VST3..."
+          codesign --force --deep --sign - artifact/*.vst3 || true
+
+          echo "Artifact contents:"
+          find artifact -maxdepth 4 -print
+
+      - name: Upload VST3 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LogicalChaos-Android-Debug
-          path: GeneratedAndroidApp/Builds/Android/app/build/outputs/apk/debug/*.apk
+          name: LogicalChaos-macOS-VST3
+          path: artifact
