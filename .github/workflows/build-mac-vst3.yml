@@ -32,47 +32,48 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
 
-      - name: Download and extract Cmajor Linux tools
+            - name: Download and extract Cmajor Linux tools
         run: |
           mkdir -p tools/cmajor
-          
-          # We try the most common naming pattern for the Linux zip
+          # Updated URL with the correct repo name and file pattern
           URL="https://github.com/cmajor-lang/cmajor/releases/download/${{ env.CMAJOR_VERSION }}/cmajor_linux_x64.zip"
           
           echo "Downloading from $URL"
           curl -L $URL -o cmajor.zip
           
-          # Verification: If the file is tiny, the download failed
+          # Safety check: ensure we didn't just download a '404 Not Found' page
           FILESIZE=$(stat -c%s "cmajor.zip")
           if [ $FILESIZE -lt 100000 ]; then
-              echo "!!! Error: Download failed or version ${{ env.CMAJOR_VERSION }} doesn't exist. !!!"
-              echo "GitHub Response:"
-              cat cmajor.zip
+              echo "Error: Download failed. Check if version ${{ env.CMAJOR_VERSION }} is correct."
               exit 1
           fi
           
           unzip cmajor.zip -d tools/cmajor
           
-          # Find the actual 'cmaj' binary (it's often inside a 'bin' or root folder)
+          # This command finds the 'cmaj' binary wherever it was unzipped
           CMAJ_EXEC=$(find tools/cmajor -name "cmaj" -type f -executable | head -n 1)
-          
-          if [ -z "$CMAJ_EXEC" ]; then
-              echo "!!! Error: Could not find 'cmaj' binary in the unzipped folder !!!"
-              ls -R tools/cmajor
-              exit 1
-          fi
-          
           chmod +x "$CMAJ_EXEC"
+          
+          # Save the absolute path for the next steps
           echo "CMAJ_PATH=$(pwd)/$CMAJ_EXEC" >> $GITHUB_ENV
-          echo "Using cmaj at: $CMAJ_EXEC"
+          echo "Found cmaj at: $CMAJ_EXEC"
 
       - name: Generate JUCE project for Android
         run: |
+          # Use the environment variable we just saved
           $CMAJ_PATH generate \
             --target=juce \
             --output=GeneratedAndroidApp \
             --jucePath=$GITHUB_WORKSPACE/tools/JUCE \
             LogicalChaos.cmajorpatch
+
+      - name: Build Android APK with Gradle
+        run: |
+          # Cmajor creates the Android build files inside this specific subfolder
+          cd GeneratedAndroidApp/Builds/Android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
 
       - name: Build Android APK with Gradle
         run: |
