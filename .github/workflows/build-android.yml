@@ -25,7 +25,6 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y \
             libwebkit2gtk-4.0-dev \
-            xvfb \
             at-spi2-core \
             dbus-x11
 
@@ -36,7 +35,7 @@ jobs:
           distribution: temurin
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v2
 
       - name: Clone JUCE
         run: git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
@@ -71,14 +70,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # WebKit2GTK needs both a display (Xvfb) and a D-Bus session bus
-          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-            dbus-run-session -- \
-            "$CMAJ_PATH" generate \
-              --target=juce \
-              --output=GeneratedAndroidApp \
-              --jucePath="$GITHUB_WORKSPACE/tools/JUCE" \
-              LogicalChaos.cmajorpatch
+          # GDK_BACKEND=offscreen tells GTK to render into memory rather than
+          # connecting to an X server, so cmaj never blocks on a display event loop
+          GDK_BACKEND=offscreen "$CMAJ_PATH" generate \
+            --target=juce \
+            --output=GeneratedAndroidApp \
+            --jucePath="$GITHUB_WORKSPACE/tools/JUCE" \
+            LogicalChaos.cmajorpatch
 
       - name: Build Android APK with Gradle
         run: |
