@@ -32,31 +32,45 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
 
-            - name: Download and extract Cmajor Linux tools
+                  - name: Download and extract Cmajor Windows tools
+        shell: pwsh
         run: |
-          mkdir -p tools/cmajor
-          # Updated URL with the correct repo name and file pattern
-          URL="https://github.com/cmajor-lang/cmajor/releases/download/${{ env.CMAJOR_VERSION }}/cmajor_linux_x64.zip"
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path tools/cmajor | Out-Null
+
+          # Download
+          $exeUrl  = "https://github.com/cmajor-lang/cmajor/releases/download/$env:CMAJOR_VERSION/cmajor_win_x64.exe"
+          $exeFile = "cmajor_win_x64.exe"
+          Write-Host "Downloading Cmajor Windows tools from: $exeUrl"
+          Invoke-WebRequest -Uri $exeUrl -OutFile $exeFile
+
+          if (-not (Test-Path $exeFile)) {
+            Write-Error "Cmajor download failed."
+            exit 1
+          }
+
+          # Find 7-Zip
+          $sevenZip = $null
+          $possible7ZipPaths = @("C:\Program Files\7-Zip\7z.exe", "C:\Program Files (x86)\7-Zip\7z.exe")
+          foreach ($path in $possible7ZipPaths) { if (Test-Path $path) { $sevenZip = $path; break } }
           
-          echo "Downloading from $URL"
-          curl -L $URL -o cmajor.zip
+          if (-not $sevenZip) {
+            Write-Host "Installing 7-Zip via Chocolatey..."
+            choco install 7zip -y --no-progress
+            $sevenZip = (where.exe 7z 2>$null)[0]
+          }
+
+          if (-not $sevenZip) { Write-Error "Could not find 7-Zip"; exit 1 }
+
+          # Extract
+          Write-Host "Extracting Cmajor tools using $sevenZip..."
+          & $sevenZip x $exeFile "-otools\cmajor" -y
           
-          # Safety check: ensure we didn't just download a '404 Not Found' page
-          FILESIZE=$(stat -c%s "cmajor.zip")
-          if [ $FILESIZE -lt 100000 ]; then
-              echo "Error: Download failed. Check if version ${{ env.CMAJOR_VERSION }} is correct."
-              exit 1
-          fi
-          
-          unzip cmajor.zip -d tools/cmajor
-          
-          # This command finds the 'cmaj' binary wherever it was unzipped
-          CMAJ_EXEC=$(find tools/cmajor -name "cmaj" -type f -executable | head -n 1)
-          chmod +x "$CMAJ_EXEC"
-          
-          # Save the absolute path for the next steps
-          echo "CMAJ_PATH=$(pwd)/$CMAJ_EXEC" >> $GITHUB_ENV
-          echo "Found cmaj at: $CMAJ_EXEC"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Extraction failed. Exit code: $LASTEXITCODE"
+            exit 1
+          }
+
 
       - name: Generate JUCE project for Android
         run: |
