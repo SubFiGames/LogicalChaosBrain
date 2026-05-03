@@ -35,11 +35,29 @@ jobs:
           set -euo pipefail
           mkdir -p tools/cmajor
 
-          archive_url="https://github.com/cmajor-lang/cmajor/releases/download/${CMAJOR_VERSION}/cmajor_linux_x64.tar.gz"
-          archive_file="cmajor_linux_x64.tar.gz"
+          archive_file="cmajor_linux_tools.tar.gz"
+          candidate_urls=(
+            "https://github.com/cmajor-lang/cmajor/releases/download/${CMAJOR_VERSION}/cmajor_linux_x64.tar.gz"
+            "https://github.com/cmajor-lang/cmajor/releases/download/${CMAJOR_VERSION}/cmajor-linux-x64.tar.gz"
+            "https://github.com/cmajor-lang/cmajor/releases/download/${CMAJOR_VERSION}/cmajor_linux.tar.gz"
+          )
 
-          echo "Downloading Cmajor Linux tools from: ${archive_url}"
-          curl -fL "${archive_url}" -o "${archive_file}"
+          downloaded="false"
+          for archive_url in "${candidate_urls[@]}"; do
+            echo "Attempting Cmajor download: ${archive_url}"
+            if curl -fL "${archive_url}" -o "${archive_file}"; then
+              downloaded="true"
+              break
+            fi
+          done
+
+          if [ "${downloaded}" != "true" ]; then
+            echo "Failed to download Cmajor Linux tools for version ${CMAJOR_VERSION}." >&2
+            echo "Tried URLs:" >&2
+            printf '  - %s\n' "${candidate_urls[@]}" >&2
+            exit 1
+          fi
+
           tar -xzf "${archive_file}" -C tools/cmajor
 
           cmaj_path="$(find "${GITHUB_WORKSPACE}/tools/cmajor" -type f -name cmaj | head -n 1)"
@@ -67,6 +85,11 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug
 
+      - name: Collect and Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LogicalChaos-Android-Debug
+          path: GeneratedAndroidApp/Builds/Android/app/build/outputs/apk/debug/*.apk
       - name: Collect and Upload APK
         uses: actions/upload-artifact@v4
         with:
