@@ -31,14 +31,37 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
 
-      - name: Download and extract Cmajor Linux tools
+            - name: Download and extract Cmajor Linux tools
         run: |
           mkdir -p tools/cmajor
-          # Note: Using the Linux version of the tools for the Ubuntu runner
-          curl -L "https://github.com/cmajor-lang/cmajor/releases/download/${{ env.CMAJOR_VERSION }}/cmajor_linux_x64.zip" -o cmajor.zip
+          
+          # We use -L to follow redirects and -O to specify the output filename
+          # Attempting to download the Linux binary directly
+          URL="https://github.com/cmajor-lang/cmajor/releases/download/${{ env.CMAJOR_VERSION }}/cmajor_linux_x64.zip"
+          
+          echo "Downloading from $URL"
+          curl -L $URL -o cmajor.zip
+          
+          # Debug: check the file size and type
+          ls -lh cmajor.zip
+          file cmajor.zip
+          
+          # Check if the file is suspiciously small (under 100KB)
+          FILESIZE=$(stat -c%s "cmajor.zip")
+          if [ $FILESIZE -lt 100000 ]; then
+              echo "Error: The downloaded file is too small ($FILESIZE bytes). The URL might be wrong."
+              cat cmajor.zip # Print the content to see the error message from GitHub
+              exit 1
+          fi
+          
           unzip cmajor.zip -d tools/cmajor
-          chmod +x tools/cmajor/cmaj
-          echo "CMAJ_PATH=$GITHUB_WORKSPACE/tools/cmajor/cmaj" >> $GITHUB_ENV
+          
+          # Find the cmaj binary (it might be in a subfolder after unzipping)
+          CMAJ_EXEC=$(find $GITHUB_WORKSPACE/tools/cmajor -name "cmaj" -type f)
+          chmod +x $CMAJ_EXEC
+          echo "CMAJ_PATH=$CMAJ_EXEC" >> $GITHUB_ENV
+          echo "Found cmaj at: $CMAJ_EXEC"
+
 
       - name: Validate required project files
         run: |
