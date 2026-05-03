@@ -12,11 +12,18 @@ permissions:
 
 jobs:
   build-android:
-    runs-on: ubuntu-latest
+    # ubuntu-latest is 24.04 which dropped libwebkit2gtk-4.0 that cmaj requires;
+    # pin to 22.04 where it is still available
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout project
         uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libwebkit2gtk-4.0-dev
 
       - name: Set up JDK
         uses: actions/setup-java@v4
