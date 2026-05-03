@@ -18,24 +18,11 @@ jobs:
       - name: Checkout project
         uses: actions/checkout@v5
 
-      - name: Generate JUCE project from Cmajor patch
+      - name: Clone JUCE
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $jucePath = Join-Path $env:GITHUB_WORKSPACE "tools\JUCE"
-
-          # 1. Generate the project
-          & $env:CMAJ_PATH generate `
-            --target=juce `
-            --output=GeneratedPlugin `
-            "--jucePath=$jucePath" `
-            LogicalChaos.cmajorpatch
-
-          # 2. CRITICAL FIX: Copy your source files INTO the generated folder 
-          # so JUCE can bundle them into the VST3 Resources.
-          Copy-Item "LogicalChaos.cmajorpatch" "GeneratedPlugin/Source/"
-          Copy-Item "Main.cmajor" "GeneratedPlugin/Source/"
-          Copy-Item "view.js" "GeneratedPlugin/Source/"
+          git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
 
       - name: Download and Install Cmajor
         shell: pwsh
@@ -49,31 +36,14 @@ jobs:
           Write-Host "Downloading Cmajor installer from: $exeUrl"
           Invoke-WebRequest -Uri $exeUrl -OutFile $installer
 
-          if (-not (Test-Path $installer)) {
-            Write-Error "Installer failed to download."
-            exit 1
-          }
+          if (-not (Test-Path $installer)) { exit 1 }
 
-          Write-Host "Running Cmajor silent installation to $installDir..."
-          # Run the Inno Setup installer silently
+          Write-Host "Running Cmajor silent installation..."
           $process = Start-Process -FilePath ".\$installer" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /DIR=`"$installDir`"" -Wait -PassThru
-
-          if ($process.ExitCode -ne 0) {
-            Write-Warning "Installer exited with code $($process.ExitCode). Checking for files anyway..."
-          }
-
-          # Wait a moment for file locks to release
           Start-Sleep -Seconds 2
 
           $cmaj = Get-ChildItem -Path $installDir -Recurse -Filter "cmaj.exe" | Select-Object -First 1
-
-          if (-not $cmaj) {
-            Write-Error "Could not find cmaj.exe after silent installation."
-            Get-ChildItem -Path $installDir -Recurse | ForEach-Object { Write-Host $_.FullName }
-            exit 1
-          }
-
-          Write-Host "Successfully installed! Found cmaj.exe at: $($cmaj.FullName)"
+          if (-not $cmaj) { exit 1 }
           
           "CMAJ_PATH=$($cmaj.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "CMAJ_DIR=$($cmaj.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -82,136 +52,55 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Add the installation folder to PATH so the compiler can locate its DLLs
           $env:PATH = "$env:CMAJ_DIR;" + $env:PATH
-          
-          Write-Host "Testing cmaj help..."
           & "$env:CMAJ_PATH" help
-
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "cmaj execution failed."
-            exit 1
-          }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           
       - name: Validate required project files
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
-          Write-Host "Repo files:"
-          Get-ChildItem -Path . -Recurse -File |
-            Select-Object -First 300 |
-            ForEach-Object { Write-Host $_.FullName }
-
-          $requiredFiles = @(
-            "LogicalChaos.cmajorpatch",
-            "Main.cmajor",
-            "view.js"
-          )
-
+          $requiredFiles = @("LogicalChaos.cmajorpatch", "Main.cmajor", "view.js")
           foreach ($file in $requiredFiles) {
-            if (-not (Test-Path $file)) {
-              Write-Error "Missing required file: $file"
-              exit 1
-            }
+            if (-not (Test-Path $file)) { exit 1 }
           }
 
-          Write-Host "All required project files are present."
-
-      - name: Generate JUCE project from Cmajor patch
+      - name: Generate JUCE project and Copy Assets
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
           $jucePath = Join-Path $env:GITHUB_WORKSPACE "tools\JUCE"
+          if (Test-Path "GeneratedPlugin") { Remove-Item "GeneratedPlugin" -Recurse -Force }
 
-          if (Test-Path "GeneratedPlugin") {
-            Remove-Item "GeneratedPlugin" -Recurse -Force
-          }
+          # 1. Generate the project
+          & $env:CMAJ_PATH generate --target=juce --output=GeneratedPlugin "--jucePath=$jucePath" LogicalChaos.cmajorpatch
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
-          Write-Host "Generating JUCE project..."
-          Write-Host "Cmajor: $env:CMAJ_PATH"
-          Write-Host "JUCE:   $jucePath"
-
-          & $env:CMAJ_PATH generate `
-            --target=juce `
-            --output=GeneratedPlugin `
-            "--jucePath=$jucePath" `
-            LogicalChaos.cmajorpatch
-
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "cmaj generate failed with exit code $LASTEXITCODE"
-            exit 1
-          }
-
-          if (-not (Test-Path "GeneratedPlugin\CMakeLists.txt")) {
-            Write-Error "GeneratedPlugin/CMakeLists.txt was not created."
-            Get-ChildItem -Path GeneratedPlugin -Recurse |
-              ForEach-Object { Write-Host $_.FullName }
-            exit 1
-          }
-
-          Write-Host "Generated project:"
-          Get-ChildItem -Path GeneratedPlugin -Recurse |
-            Select-Object -First 300 |
-            ForEach-Object { Write-Host $_.FullName }
+          # 2. Embed the GUI files so they aren't missing!
+          Copy-Item "LogicalChaos.cmajorpatch" "GeneratedPlugin/Source/" -Force
+          Copy-Item "Main.cmajor" "GeneratedPlugin/Source/" -Force
+          Copy-Item "view.js" "GeneratedPlugin/Source/" -Force
 
       - name: Configure generated plugin
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
-          cmake `
-            -S GeneratedPlugin `
-            -B build `
-            -G "Visual Studio 17 2022" `
-            -A x64
-
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "CMake configure failed with exit code $LASTEXITCODE"
-            exit 1
-          }
+          cmake -S GeneratedPlugin -B build -G "Visual Studio 17 2022" -A x64
 
       - name: Build generated plugin
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
           cmake --build build --config Release --parallel
-
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "CMake build failed with exit code $LASTEXITCODE"
-            exit 1
-          }
 
       - name: Collect VST3
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
-
-          Write-Host "Searching for built VST3..."
-          $vst3 = Get-ChildItem -Path build -Recurse -Directory -Filter "*.vst3" |
-            Select-Object -First 1
-
-          if (-not $vst3) {
-            Write-Error "No VST3 bundle was built."
-            Write-Host "Build folder contents:"
-            Get-ChildItem -Path build -Recurse |
-              Select-Object -First 500 |
-              ForEach-Object { Write-Host $_.FullName }
-            exit 1
-          }
-
-          Write-Host "Found VST3:"
-          Write-Host $vst3.FullName
-
+          $vst3 = Get-ChildItem -Path build -Recurse -Directory -Filter "*.vst3" | Select-Object -First 1
+          if (-not $vst3) { exit 1 }
           Copy-Item $vst3.FullName -Destination artifact -Recurse -Force
-
-          Write-Host "Artifact contents:"
-          Get-ChildItem -Path artifact -Recurse |
-            ForEach-Object { Write-Host $_.FullName }
 
       - name: Upload VST3 artifact
         uses: actions/upload-artifact@v6
