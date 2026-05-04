@@ -7,7 +7,7 @@ on:
 
 env:
   # ⚠️ CRITICAL: Change this to the exact name of your patch file
-  PATCH_FILE: "YourApp.cmajorpatch" 
+  PATCH_FILE: "LogicalChaos.cmajorpatch" 
 
 jobs:
   build:
@@ -31,14 +31,15 @@ jobs:
           ref: master # You can pin this to '8.0.0' for strict version control
           path: JUCE
 
-      - name: Download and Install Cmajor CLI
+            - name: Download and Install Cmajor CLI
         run: |
-          # Fetch the latest Linux Cmajor CLI release
-          wget https://github.com/cmajor-lang/cmajor/releases/latest/download/Cmajor-linux.zip -O cmajor.zip
+          # Fetch the latest Linux x64 Cmajor CLI release
+          wget https://github.com/cmajor-lang/cmajor/releases/latest/download/cmajor.linux.x64.zip -O cmajor.zip
           unzip cmajor.zip -d cmajor-cli
           
           # Add the bin directory to GITHUB_PATH so 'cmaj' is accessible globally
           echo "${{ github.workspace }}/cmajor-cli/bin" >> $GITHUB_PATH
+
 
       - name: Generate JUCE Project from Patch
         run: |
