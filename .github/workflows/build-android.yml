@@ -1,41 +1,42 @@
-name: Build Android App
+name: Android CI (Option B - Template Host)
 
 on:
   workflow_dispatch:
-
-env:
-  CMAJOR_VERSION: 1.0.3096
-  JAVA_VERSION: '17'
-
-permissions:
-  contents: read
+  push:
+    branches: [ main, master ]
+  pull_request:
 
 jobs:
-  # Job 1: generate the JUCE CMake project on macOS
-  # cmaj uses Apple's native WebKit on macOS so it runs headlessly.
-  # On Linux it uses WebKit2GTK which hangs in every headless configuration.
-  generate-juce-project:
-    runs-on: macos-latest
+  build-android:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_API: "34"
+      ANDROID_ABI: "arm64-v8a"
+      HOST_REPO: "juce-framework/JUCE"
+      HOST_REF: "master"
 
     steps:
-      - name: Checkout project
+      - name: Checkout patch repository
         uses: actions/checkout@v4
 
-      - name: Download Cmajor macOS tools
-        run: |
-          set -e
-          mkdir -p tools/cmajor
+      - name: Checkout JUCE template host
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.HOST_REPO }}
+          ref: ${{ env.HOST_REF }}
+          path: host
 
-          curl -L \
-            "https://github.com/cmajor-lang/cmajor/releases/download/${CMAJOR_VERSION}/cmajor.dmg" \
-            -o cmajor.dmg
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
 
-          hdiutil attach cmajor.dmg -mountpoint /Volumes/cmajor-install -nobrowse
-          cp -R /Volumes/cmajor-install/* tools/cmajor/
-          hdiutil detach /Volumes/cmajor-install
+      - name: Setup Android SDK/NDK
+        uses: android-actions/setup-android@v3
 
-          echo "--- tools/cmajor contents ---"
-          find tools/cmajor -maxdepth 5 | sort
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
 
           CMAJ=""
           while IFS= read -r candidate; do
@@ -85,68 +86,50 @@ jobs:
             exit $EXIT_CODE
           fi
 
-          echo "--- Generated project structure ---"
-          find GeneratedAndroidApp -type f | sort
+          echo "Discovered cmaj candidates:"
+          find cmaj -type f \( -name cmaj -o -name cmaj.exe \) | sort
 
-      - name: Upload generated JUCE project
+          CMAJ_BIN=""
+          while IFS= read -r candidate; do
+            chmod +x "$candidate" || true
+            if "$candidate" --version >/dev/null 2>&1; then
+              CMAJ_BIN="$candidate"
+              break
+            fi
+          done < <(find cmaj -type f -name cmaj | sort)
+
+          if [ -z "$CMAJ_BIN" ]; then
+            echo "ERROR: no runnable Linux cmaj binary was found"
+            exit 1
+          fi
+
+          echo "CMAJ_BIN=$CMAJ_BIN" >> "$GITHUB_ENV"
+          echo "Selected cmaj: $CMAJ_BIN"
+          file "$CMAJ_BIN" || true
+          "$CMAJ_BIN" --version
+
+      - name: Generate JUCE project from patch
+        run: |
+          set -euo pipefail
+          "$CMAJ_BIN" generate --target=juce --output generated-juce LogicalChaos.cmajorpatch
+
+      - name: Configure Android build via CMake
+        run: |
+          set -euo pipefail
+          NDK_PATH="$ANDROID_NDK_ROOT"
+          cmake -S generated-juce -B build-android \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DANDROID_PLATFORM=android-${ANDROID_API} \
+            -DANDROID_ABI=${ANDROID_ABI} \
+            -DCMAKE_ANDROID_NDK="$NDK_PATH"
+
+      - name: Build
+        run: cmake --build build-android --config Release --parallel
+
+      - name: Upload build folder
         uses: actions/upload-artifact@v4
         with:
-          name: GeneratedJuceProject
-          path: GeneratedAndroidApp
-
-  # Job 2: compile for Android on Linux using the generated CMake project
-  build-android:
-    needs: generate-juce-project
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Download generated JUCE project
-        uses: actions/download-artifact@v4
-        with:
-          name: GeneratedJuceProject
-          path: GeneratedAndroidApp
-
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          java-version: ${{ env.JAVA_VERSION }}
-          distribution: temurin
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v2
-
-      - name: Install Android NDK
-        run: |
-          sdkmanager --install "ndk;25.2.9519653"
-          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> "$GITHUB_ENV"
-
-      - name: Show generated project structure
-        run: |
-          echo "Contents of GeneratedAndroidApp:"
-          find GeneratedAndroidApp -type f | sort
-
-      - name: Configure with CMake for Android
-        run: |
-          cmake \
-            -S GeneratedAndroidApp \
-            -B build-android \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-24 \
-            -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build Android native library
-        run: cmake --build build-android --parallel
-
-      - name: Collect build output
-        run: |
-          mkdir -p artifact
-          find build-android \( -name "*.so" -o -name "*.apk" \) -exec cp {} artifact/ \;
-          echo "Artifact contents:"
-          ls -lh artifact/
-
-      - name: Upload Android artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: LogicalChaos-Android
-          path: artifact
+          name: android-build-output
+          path: build-android
