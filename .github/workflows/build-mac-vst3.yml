@@ -67,19 +67,25 @@ jobs:
         run: |
           set -e
 
-          CMAJ_PATH=$(find tools/cmajor -type f -name "cmaj" | head -1)
+          CMAJ_PATH=""
+          while IFS= read -r candidate; do
+            chmod +x "$candidate" || true
+            if "$candidate" --help >/dev/null 2>&1; then
+              CMAJ_PATH="$candidate"
+              break
+            fi
+          done < <(find tools/cmajor -type f -name "cmaj" | sort)
 
           if [ -z "$CMAJ_PATH" ]; then
-            echo "Could not find cmaj executable."
+            echo "Could not find a runnable cmaj executable for this runner."
             find tools/cmajor -maxdepth 6 -type f
             exit 1
           fi
 
-          chmod +x "$CMAJ_PATH"
           echo "CMAJ_PATH=$CMAJ_PATH" >> "$GITHUB_ENV"
 
           echo "Using cmaj at: $CMAJ_PATH"
-          "$CMAJ_PATH" --help || true
+          "$CMAJ_PATH" --help
 
       - name: Validate required project files
         shell: bash
