@@ -1,71 +1,73 @@
-name: Android CI (Option B - Template Host)
+name: Android CI (Logical Chaos)
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [ "main", "master" ]
   pull_request:
+    branches: [ "main", "master" ]
 
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    
     env:
-      ANDROID_API: "34"
+      PATCH_FILE: "LogicalChaos.cmajorpatch"
       ANDROID_ABI: "arm64-v8a"
-      HOST_REPO: "juce-framework/JUCE"
-      HOST_REF: "master"
 
     steps:
       - name: Checkout patch repository
         uses: actions/checkout@v4
 
-      - name: Checkout JUCE template host
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.HOST_REPO }}
-          ref: ${{ env.HOST_REF }}
-          path: host
-
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: "17"
+          distribution: 'temurin'
+          java-version: '17'
 
-      - name: Setup Android SDK/NDK
-        uses: android-actions/setup-android@v3
+      - name: Checkout JUCE Framework
+        uses: actions/checkout@v4
+        with:
+          repository: juce-framework/JUCE
+          ref: master
+          path: JUCE
 
-      - name: Install Ninja
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
-
-      - name: Install cmaj CLI
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Install Cmajor CLI
         run: |
-          API_JSON=$(curl -fsSL \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/cmajor-lang/cmajor/releases/latest)
-          export API_JSON
-          URL=$(python - <<'PY'
-          import json, os
-          data = json.loads(os.environ['API_JSON'])
-          assets = data.get('assets', [])
-          for a in assets:
-              n = a.get('name', '').lower()
-              if 'linux' in n and ('cmaj' in n or 'command' in n or 'tools' in n) and (n.endswith('.zip') or n.endswith('.tar.gz')):
-                  print(a['browser_download_url'])
-                  raise SystemExit(0)
-          raise SystemExit('No suitable Linux cmaj asset found in latest release')
-          PY)
-          curl -L "$URL" -o cmaj_pkg
-          mkdir -p cmaj
-          if file cmaj_pkg | grep -qi zip; then
-            mv cmaj_pkg cmaj.zip
-            unzip -q cmaj.zip -d cmaj
-          else
-            mv cmaj_pkg cmaj.tar.gz
-            tar -xzf cmaj.tar.gz -C cmaj
+          # We use the direct link because it's much more stable than API scraping
+          wget https://github.com/cmajor-lang/cmajor/releases/latest/download/cmajor.linux.x64.zip -O cmajor.zip
+          unzip cmajor.zip -d cmajor-cli
+          chmod +x cmajor-cli/bin/cmaj
+          echo "${{ github.workspace }}/cmajor-cli/bin" >> $GITHUB_PATH
+
+      - name: Generate JUCE Project from Patch
+        run: |
+          # This converts your .cmajorpatch into actual C++ source code
+          cmaj generate \
+            --target=juce \
+            --jucePath=${{ github.workspace }}/JUCE \
+            ${{ env.PATCH_FILE }} \
+            --output=GeneratedApp
+
+      - name: Configure CMake for Android
+        run: |
+          # $ANDROID_NDK_LATEST_HOME is built into the GitHub runner
+          cmake -B build -S GeneratedApp \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_SYSTEM_VERSION=29 \
+            -DCMAKE_ANDROID_ARCH_ABI=${{ env.ANDROID_ABI }} \
+            -DCMAKE_ANDROID_NDK=$ANDROID_NDK_LATEST_HOME \
+            -DCMAKE_ANDROID_STL_TYPE=c++_shared
+
+      - name: Build APK
+        run: |
+          cmake --build build --config Release
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LogicalChaos-Android-APK
+          path: build/**/*.apk
           fi
           CANDIDATE=$(find cmaj -type f \( -name cmaj -o -name cmaj.exe \) | head -n1)
           chmod +x "$CANDIDATE"
