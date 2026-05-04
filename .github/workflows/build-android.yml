@@ -37,7 +37,6 @@ jobs:
           echo "--- tools/cmajor contents ---"
           find tools/cmajor -maxdepth 5 | sort
 
-          # Prefer macOS binaries only (avoid linux/* binaries inside the DMG payload)
           CMAJ=""
           while IFS= read -r candidate; do
             chmod +x "$candidate" || true
@@ -45,18 +44,7 @@ jobs:
               CMAJ="$candidate"
               break
             fi
-          done < <(find tools/cmajor -type f -path "*/macos/*/cmaj" | sort)
-
-          # Fallback: if layout changes in a future Cmajor release, try any runnable cmaj
-          if [ -z "$CMAJ" ]; then
-            while IFS= read -r candidate; do
-              chmod +x "$candidate" || true
-              if "$candidate" --version >/dev/null 2>&1; then
-                CMAJ="$candidate"
-                break
-              fi
-            done < <(find tools/cmajor -type f -name "cmaj" | sort)
-          fi
+          done < <(find tools/cmajor -type f -name "cmaj" | sort)
           if [ -z "$CMAJ" ]; then
             echo "ERROR: runnable cmaj binary not found after extracting DMG"
             exit 1
