@@ -39,22 +39,25 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
       - name: Install cmaj CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python - <<'PY'
-          import urllib.request, json, os
-          data = json.load(urllib.request.urlopen('https://api.github.com/repos/cmajor-lang/cmajor/releases/latest'))
+          API_JSON=$(curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/cmajor-lang/cmajor/releases/latest)
+          export API_JSON
+          URL=$(python - <<'PY'
+          import json, os
+          data = json.loads(os.environ['API_JSON'])
           assets = data.get('assets', [])
-          url = None
           for a in assets:
-            n = a.get('name','').lower()
-            if 'linux' in n and ('cmaj' in n or 'command' in n or 'tools' in n) and (n.endswith('.zip') or n.endswith('.tar.gz')):
-              url = a['browser_download_url']; break
-          if not url:
-            raise SystemExit('No suitable Linux cmaj asset found in latest release')
-          print(url)
-          open('cmaj_url.txt','w').write(url)
-          PY
-          URL=$(cat cmaj_url.txt)
+              n = a.get('name', '').lower()
+              if 'linux' in n and ('cmaj' in n or 'command' in n or 'tools' in n) and (n.endswith('.zip') or n.endswith('.tar.gz')):
+                  print(a['browser_download_url'])
+                  raise SystemExit(0)
+          raise SystemExit('No suitable Linux cmaj asset found in latest release')
+          PY)
           curl -L "$URL" -o cmaj_pkg
           mkdir -p cmaj
           if file cmaj_pkg | grep -qi zip; then
