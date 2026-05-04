@@ -37,13 +37,19 @@ jobs:
           echo "--- tools/cmajor contents ---"
           find tools/cmajor -maxdepth 5 | sort
 
-          CMAJ=$(find tools/cmajor -type f -name "cmaj" | head -1)
+          CMAJ=""
+          while IFS= read -r candidate; do
+            chmod +x "$candidate" || true
+            if "$candidate" --version >/dev/null 2>&1; then
+              CMAJ="$candidate"
+              break
+            fi
+          done < <(find tools/cmajor -type f -name "cmaj" | sort)
           if [ -z "$CMAJ" ]; then
-            echo "ERROR: cmaj binary not found after extracting DMG"
+            echo "ERROR: runnable cmaj binary not found after extracting DMG"
             exit 1
           fi
 
-          chmod +x "$CMAJ"
           echo "CMAJ_PATH=$CMAJ" >> "$GITHUB_ENV"
           echo "Found cmaj at: $CMAJ"
           "$CMAJ" --version || true
