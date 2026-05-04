@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 
 env:
-  # The exact name of your patch file in the repo
   PATCH_FILE: "LogicalChaos.cmajorpatch" 
 
 jobs:
@@ -33,19 +32,13 @@ jobs:
 
       - name: Download and Install Cmajor CLI
         run: |
-          # Fetch the correct Linux x64 binary
           wget https://github.com/cmajor-lang/cmajor/releases/latest/download/cmajor.linux.x64.zip -O cmajor.zip
           unzip cmajor.zip -d cmajor-cli
-          
-          # Make the binary executable
           chmod +x cmajor-cli/bin/cmaj
-          
-          # Add the bin directory to GITHUB_PATH
           echo "${{ github.workspace }}/cmajor-cli/bin" >> $GITHUB_PATH
 
       - name: Generate JUCE Project from Patch
         run: |
-          # Generate the C++ source from the Cmajor patch
           cmaj generate \
             --target=juce \
             --jucePath=${{ github.workspace }}/JUCE \
@@ -54,7 +47,6 @@ jobs:
 
       - name: Configure CMake for Android
         run: |
-          # $ANDROID_NDK_LATEST_HOME is provided by the GitHub runner
           cmake -B build -S GeneratedApp \
             -DCMAKE_SYSTEM_NAME=Android \
             -DCMAKE_SYSTEM_VERSION=29 \
@@ -64,8 +56,13 @@ jobs:
 
       - name: Build APK
         run: |
-          # Build the release version
           cmake --build build --config Release
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LogicalChaos-Android-APK
+          path: build/**/*.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
