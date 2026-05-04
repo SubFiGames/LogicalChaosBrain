@@ -37,14 +37,33 @@ jobs:
           echo "--- tools/cmajor contents ---"
           find tools/cmajor -maxdepth 5 | sort
 
-          CMAJ=$(find tools/cmajor -type f -name "cmaj" | head -1)
+          # Prefer macOS binaries only (avoid linux/* binaries inside the DMG payload)
+          CMAJ=""
+          while IFS= read -r candidate; do
+            chmod +x "$candidate" || true
+            if "$candidate" --version >/dev/null 2>&1; then
+              CMAJ="$candidate"
+              break
+            fi
+          done < <(find tools/cmajor -type f -path "*/macos/*/cmaj" | sort)
+
+          # Fallback: if layout changes in a future Cmajor release, try any runnable cmaj
           if [ -z "$CMAJ" ]; then
-            echo "ERROR: cmaj binary not found after extracting DMG"
+            while IFS= read -r candidate; do
+              chmod +x "$candidate" || true
+              if "$candidate" --version >/dev/null 2>&1; then
+                CMAJ="$candidate"
+                break
+              fi
+            done < <(find tools/cmajor -type f -name "cmaj" | sort)
+          fi
+          if [ -z "$CMAJ" ]; then
+            echo "ERROR: runnable cmaj binary not found after extracting DMG"
             exit 1
           fi
 
-          chmod +x "$CMAJ"
           echo "CMAJ_PATH=$CMAJ" >> "$GITHUB_ENV"
+          echo "CMAJ_BIN=$CMAJ" >> "$GITHUB_ENV"
           echo "Found cmaj at: $CMAJ"
           "$CMAJ" --version || true
 
@@ -54,14 +73,17 @@ jobs:
       - name: Generate JUCE project
         run: |
           set -e
-          echo "Running: $CMAJ_PATH generate --target=juce"
+          echo "Running: $CMAJ_BIN generate --target=juce"
           echo "JUCE path: $GITHUB_WORKSPACE/tools/JUCE"
           echo "Patch file:"
           cat LogicalChaos.cmajorpatch
+          echo "Binary details:"
+          echo "CMAJ_BIN=$CMAJ_BIN"
+          file "$CMAJ_BIN" || true
 
           # Capture all output so the error is visible in the step log
           set +e
-          "$CMAJ_PATH" generate \
+          "$CMAJ_BIN" generate \
             --target=juce \
             --output=GeneratedAndroidApp \
             --jucePath="$GITHUB_WORKSPACE/tools/JUCE" \
