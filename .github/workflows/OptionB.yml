@@ -1,0 +1,93 @@
+name: Android CI (Option B - Template Host)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_API: "34"
+      ANDROID_ABI: "arm64-v8a"
+      HOST_REPO: "juce-framework/JUCE"
+      HOST_REF: "master"
+
+    steps:
+      - name: Checkout patch repository
+        uses: actions/checkout@v4
+
+      - name: Checkout JUCE template host
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.HOST_REPO }}
+          ref: ${{ env.HOST_REF }}
+          path: host
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK/NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Install cmaj CLI
+        run: |
+          python - <<'PY'
+          import urllib.request, json, os
+          data = json.load(urllib.request.urlopen('https://api.github.com/repos/cmajor-lang/cmajor/releases/latest'))
+          assets = data.get('assets', [])
+          url = None
+          for a in assets:
+            n = a.get('name','').lower()
+            if 'linux' in n and ('cmaj' in n or 'command' in n or 'tools' in n) and (n.endswith('.zip') or n.endswith('.tar.gz')):
+              url = a['browser_download_url']; break
+          if not url:
+            raise SystemExit('No suitable Linux cmaj asset found in latest release')
+          print(url)
+          open('cmaj_url.txt','w').write(url)
+          PY
+          URL=$(cat cmaj_url.txt)
+          curl -L "$URL" -o cmaj_pkg
+          mkdir -p cmaj
+          if file cmaj_pkg | grep -qi zip; then
+            mv cmaj_pkg cmaj.zip
+            unzip -q cmaj.zip -d cmaj
+          else
+            mv cmaj_pkg cmaj.tar.gz
+            tar -xzf cmaj.tar.gz -C cmaj
+          fi
+          CANDIDATE=$(find cmaj -type f \( -name cmaj -o -name cmaj.exe \) | head -n1)
+          chmod +x "$CANDIDATE"
+          echo "CMAJ_BIN=$CANDIDATE" >> $GITHUB_ENV
+
+      - name: Generate JUCE project from patch
+        run: |
+          "$CMAJ_BIN" generate --target=juce --output generated-juce LogicalChaos.cmajorpatch
+
+      - name: Configure Android build via CMake
+        run: |
+          NDK_PATH="$ANDROID_NDK_ROOT"
+          cmake -S generated-juce -B build-android \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DANDROID_PLATFORM=android-${ANDROID_API} \
+            -DANDROID_ABI=${ANDROID_ABI} \
+            -DCMAKE_ANDROID_NDK="$NDK_PATH"
+
+      - name: Build
+        run: cmake --build build-android --config Release --parallel
+
+      - name: Upload build folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-output
+          path: build-android
