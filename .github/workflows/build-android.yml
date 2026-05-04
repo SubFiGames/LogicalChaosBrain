@@ -72,8 +72,7 @@ jobs:
         with:
           name: LogicalChaos-Android-APK
           path: build/**/*.apk
-          wget https://github.com/cmajor-lang/cmajor/releases/latest/download/cmajor.linux.x64.zip -O cmajor.zip
-          unzip cmajor.zip -d cmajor-cli
+          
           
           # Add the bin directory to GITHUB_PATH so 'cmaj' is accessible globally
           echo "${{ github.workspace }}/cmajor-cli/bin" >> $GITHUB_PATH
