@@ -105,10 +105,12 @@ public:
 
         try
         {
-            // Force JUCE's MessageManager to exist before any code path that
-            // might touch it.  Cmajor's processor occasionally pokes JUCE
-            // internals that assume MessageManager::getInstance() is non-null.
-            (void) juce::MessageManager::getInstance();
+            // IMPORTANT (Android): do NOT pre-create juce::MessageManager here.
+            // In this minimal Activity/Oboe bootstrap the JUCE Java side may
+            // not be initialised yet, and MessageManager::getInstance() can
+            // crash while trying to bind Android looper helpers.
+            // This engine path is audio-only and does not require a JUCE
+            // message thread to construct the processor.
 
             LOGI ("Engine::create — calling createPluginFilter()");
             processor_.reset (createPluginFilter());
