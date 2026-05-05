@@ -31,10 +31,13 @@
 #include <mutex>
 #include <string>
 
-// JUCE pulls juce_audio_devices (Oboe-backed on Android) and juce_audio_processors.
-// Both modules are already compiled into the shared lib by the generated CMake.
+// JUCE pulls juce_audio_devices (Oboe-backed on Android), juce_audio_processors,
+// and juce_audio_utils (where AudioProcessorPlayer lives).  All three modules
+// are already compiled into the shared lib by the generated CMake — we just
+// need to pull in their public headers here.
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_audio_utils/juce_audio_utils.h>
 
 #define LOG_TAG "LogicalChaosNative"
 #define LOGI(...) __android_log_print (ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
