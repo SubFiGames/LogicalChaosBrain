@@ -3,10 +3,14 @@ name: Build Cmajor Android App
 on:
   push:
     branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
 
 env:
-  PATCH_FILE: "LogicalChaos.cmajorpatch" 
+  PATCH_FILE: "LogicalChaos.cmajorpatch"
+  APP_NAME: "LogicalChaosMelodyMachine"
+  JAVA_VERSION: '17'
 
 jobs:
   build:
@@ -14,14 +18,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: ${{ env.JAVA_VERSION }}
           distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platform-tools
+            platforms;android-33
+            build-tools;33.0.0
+            ndk;25.1.8937393
+
+      - name: Verify Android SDK Installation
+        run: |
+          echo "ANDROID_HOME: $ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT: $ANDROID_SDK_ROOT"
+          ls -la $ANDROID_HOME || echo "ANDROID_HOME not found"
+          echo "NDK_ROOT: $ANDROID_NDK_LATEST_HOME"
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config
 
       - name: Checkout JUCE Framework
         uses: actions/checkout@v4
@@ -32,75 +57,239 @@ jobs:
 
       - name: Download and Install Cmajor CLI
         run: |
-          wget https://github.com/cmajor-lang/cmajor/releases/latest/download/cmajor.linux.x64.zip -O cmajor.zip
+          # Download appropriate architecture
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "x86_64" ]; then
+            CMAJ_ARCH="x64"
+          elif [ "$ARCH" = "aarch64" ]; then
+            CMAJ_ARCH="arm64"
+          else
+            CMAJ_ARCH="x64"  # default to x64
+          fi
+          
+          wget https://github.com/cmajor-lang/cmajor/releases/latest/download/cmajor.linux.${CMAJ_ARCH}.zip -O cmajor.zip
           unzip cmajor.zip -d cmajor-cli
-          chmod +x cmajor-cli/bin/cmaj
-          echo "${{ github.workspace }}/cmajor-cli/bin" >> $GITHUB_PATH
+          find cmajor-cli -name "cmaj" -type f -exec chmod +x {} \;
+          
+          # Find and add cmaj to PATH
+          CMAJ_BIN=$(find cmajor-cli -name "cmaj" -type f | head -1)
+          CMAJ_DIR=$(dirname "$CMAJ_BIN")
+          echo "$CMAJ_DIR" >> $GITHUB_PATH
+          echo "CMAJ_PATH=$CMAJ_BIN" >> $GITHUB_ENV
 
-      - name: Generate JUCE Project from Patch
+      - name: Verify Cmajor Installation
         run: |
-          cmaj generate \
+          ${{ env.CMAJ_PATH }} --version || echo "Cmajor version check failed"
+
+      - name: Fix Main.cmajor (std::math::pow issue)
+        run: |
+          # Fix the pow function call if it exists
+          if grep -q "std::math::pow" Main.cmajor; then
+            sed -i 's/std::math::pow/pow/g' Main.cmajor
+            echo "Fixed std::math::pow to pow"
+          fi
+
+      - name: Generate JUCE Project from Cmajor Patch
+        run: |
+          ${{ env.CMAJ_PATH }} generate \
             --target=juce \
             --jucePath=${{ github.workspace }}/JUCE \
             ${{ env.PATCH_FILE }} \
-            --output=GeneratedApp
-
-      - name: Configure CMake for Android
-        run: |
-          cmake -B build -S GeneratedApp \
-            -DCMAKE_SYSTEM_NAME=Android \
-            -DCMAKE_SYSTEM_VERSION=29 \
-            -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
-            -DCMAKE_ANDROID_NDK=$ANDROID_NDK_LATEST_HOME \
-            -DCMAKE_ANDROID_STL_TYPE=c++_shared
-
-      - name: Build APK
-        run: |
-          cmake --build build --config Release
-
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: LogicalChaos-Android-APK
-          path: build/**/*.apk
-
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: LogicalChaos-Android-APK
-          path: build/**/*.apk
+            --output=GeneratedApp 2>&1 | tee cmaj-generate.log
           
+          # Check if generation was successful
+          if [ ! -d "GeneratedApp" ]; then
+            echo "ERROR: JUCE project generation failed!"
+            cat cmaj-generate.log
+            exit 1
+          fi
+
+      - name: List Generated Files
+        run: |
+          echo "=== Generated App Structure ==="
+          find GeneratedApp/ -type f | head -30
+          echo "=== CMakeLists.txt ==="
+          cat GeneratedApp/CMakeLists.txt || echo "CMakeLists.txt not found"
+
+      - name: Create Android Studio Project Structure
+        run: |
+          # Create Android project structure
+          mkdir -p AndroidProject/app/src/main/{cpp,java,res}
+          mkdir -p AndroidProject/app/src/main/java/com/subfigames/logicalchaos
           
-          # Add the bin directory to GITHUB_PATH so 'cmaj' is accessible globally
-          echo "${{ github.workspace }}/cmajor-cli/bin" >> $GITHUB_PATH
+          # Copy generated JUCE code
+          cp -r GeneratedApp/* AndroidProject/app/src/main/cpp/
+          
+          echo "Android project structure created"
 
-
-      - name: Generate JUCE Project from Patch
+      - name: Generate build.gradle files
         run: |
-          # Converts your .cmajorpatch into an Android-ready C++ project
-          cmaj generate \
-            --target=juce \
-            --jucePath=${{ github.workspace }}/JUCE \
-            ${{ env.PATCH_FILE }} \
-            --output=GeneratedApp
+          # Root build.gradle
+          cat > AndroidProject/build.gradle << 'EOF'
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.1.0'
+    }
+}
 
-      - name: Configure CMake for Android
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+EOF
+
+          # App build.gradle
+          cat > AndroidProject/app/build.gradle << 'EOF'
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.subfigames.logicalchaos.melodymachine'
+    compileSdk 33
+    ndkVersion "25.1.8937393"
+
+    defaultConfig {
+        applicationId "com.subfigames.logicalchaos.melodymachine"
+        minSdk 24
+        targetSdk 33
+        versionCode 1
+        versionName "4.0.0"
+
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17 -frtti -fexceptions"
+                arguments "-DANDROID_STL=c++_shared",
+                          "-DANDROID_PLATFORM=android-24",
+                          "-DJUCE_PATH=${projectDir}/src/main/cpp/../../../../../../JUCE"
+            }
+        }
+
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+}
+EOF
+
+          # settings.gradle
+          cat > AndroidProject/settings.gradle << 'EOF'
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "LogicalChaosMelodyMachine"
+include ':app'
+EOF
+
+          # gradle.properties
+          cat > AndroidProject/gradle.properties << 'EOF'
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+android.enableJetifier=true
+EOF
+
+          echo "Gradle files created"
+
+      - name: Create Gradle Wrapper
         run: |
-          # $ANDROID_NDK_LATEST_HOME is pre-installed on GitHub's ubuntu-latest runners
-          cmake -B build -S GeneratedApp \
-            -DCMAKE_SYSTEM_NAME=Android \
-            -DCMAKE_SYSTEM_VERSION=29 \
-            -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
-            -DCMAKE_ANDROID_NDK=$ANDROID_NDK_LATEST_HOME \
-            -DCMAKE_ANDROID_STL_TYPE=c++_shared
+          cd AndroidProject
+          gradle wrapper --gradle-version 8.2
+          chmod +x gradlew
 
-      - name: Build APK
+      - name: Build APK with Gradle
         run: |
-          # This compiles the C++ code and triggers JUCE's internal Gradle hook to package the APK
-          cmake --build build --config Release
+          cd AndroidProject
+          ./gradlew assembleDebug --stacktrace --info 2>&1 | tee ../gradle-build.log || true
+          
+          # Check if build succeeded
+          if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
+            echo "APK built successfully!"
+            ls -lh app/build/outputs/apk/debug/
+          else
+            echo "WARNING: APK not found. Build may have issues."
+            echo "Check logs for details."
+          fi
 
-      - name: Upload APK Artifact
+      - name: Find and List All APK Files
+        run: |
+          echo "=== Searching for APK files ==="
+          find . -name "*.apk" -type f -ls || echo "No APK files found"
+
+      - name: Upload APK Artifact (if found)
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: cmajor-android-apk
-          path: build/**/*.apk
+          name: ${{ env.APP_NAME }}-Android-APK
+          path: |
+            AndroidProject/app/build/outputs/apk/**/*.apk
+            **/*.apk
+          if-no-files-found: warn
+
+      - name: Upload Build Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            cmaj-generate.log
+            gradle-build.log
+          if-no-files-found: ignore
+
+      - name: Create Build Summary
+        if: always()
+        run: |
+          echo "# Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**App Name:** ${{ env.APP_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Date:** $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "AndroidProject/app/build/outputs/apk/debug/app-debug.apk" ]; then
+            APK_SIZE=$(du -h AndroidProject/app/build/outputs/apk/debug/app-debug.apk | cut -f1)
+            echo "✅ **Status:** APK Built Successfully" >> $GITHUB_STEP_SUMMARY
+            echo "📦 **APK Size:** $APK_SIZE" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ **Status:** Build completed but APK not found" >> $GITHUB_STEP_SUMMARY
+            echo "See build logs for details" >> $GITHUB_STEP_SUMMARY
+          fi

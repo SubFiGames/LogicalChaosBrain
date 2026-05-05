@@ -1,0 +1,34 @@
+# Build artifacts
+GeneratedApp/
+AndroidProject/
+build/
+*.apk
+*.aab
+
+# Dependencies
+JUCE/
+cmajor-cli/
+cmajor.zip
+*.zip
+
+# Logs
+*.log
+cmaj-generate.log
+gradle-build.log
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Android specific
+local.properties
+*.jks
+*.keystore
+
+# Gradle
+.gradle/
+gradle-wrapper.jar
+gradlew
+gradlew.bat

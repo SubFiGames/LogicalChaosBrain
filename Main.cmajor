@@ -88,7 +88,7 @@ processor MainProcessor
 
                     if (stepActive[currentStep] != 0)
                     {
-                        targetFreq = 440.0f * std::math::pow (2.0f, float (noteToPlay - 69) / 12.0f);
+                        targetFreq = 440.0f * pow (2.0f, float (noteToPlay - 69) / 12.0f);
                         envLevel = 1.0f;
                         envActive = 1;
                         if (previousGlide == 0) currentFreq = targetFreq;
