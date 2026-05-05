@@ -119,9 +119,17 @@ processor MainProcessor
             {
                 if (stepSamplesRemaining <= 0)
                 {
-                    int len         = patternLength;
-                    int noteToPlay  = stepNotes[currentStep];
-                    int prevIndex   = (currentStep == 0 ? len - 1 : currentStep - 1);
+                    int len = patternLength;
+                    if (len < 1)
+                        len = 1;
+                    if (len > 32)
+                        len = 32;
+
+                    if (currentStep < 0 || currentStep >= len)
+                        currentStep = 0;
+
+                    int noteToPlay    = stepNotes[currentStep];
+                    int prevIndex     = (currentStep == 0 ? len - 1 : currentStep - 1);
                     int previousGlide = stepGlide[prevIndex];
 
                     if (stepActive[currentStep] != 0)
@@ -207,7 +215,13 @@ processor MainProcessor
 
     void generatePattern()
     {
-        for (int i = 0; i < patternLength; ++i)
+        int len = patternLength;
+        if (len < 1)
+            len = 1;
+        if (len > 32)
+            len = 32;
+
+        for (int i = 0; i < len; ++i)
         {
             seed = seed * 1103515245 + 12345;
             float r = float (seed & 0x7fffffff) / 2147483647.0f;
