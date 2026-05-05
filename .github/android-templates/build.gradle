@@ -1,3 +1,7 @@
+// Root build.gradle
+// Repository declarations for dependencies are in settings.gradle
+// (dependencyResolutionManagement) — do NOT add allprojects { repositories {} } here
+// or Gradle will fail with FAIL_ON_PROJECT_REPOS.
 buildscript {
     repositories {
         google()
@@ -5,12 +9,5 @@ buildscript {
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:8.1.4'
-    }
-}
-
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
     }
 }
