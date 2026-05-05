@@ -78,6 +78,26 @@ view.js                    ← plugin UI (JS, exported as createPatchView)
   - Wraps `choc_MessageLoop.h` original content in `#else // not __ANDROID__` and injects an Android stub providing `initialise()`, `shutdown()`, `postMessage()`, `callerIsOnMessageThread()`, `Timer`, `run/stop/isRunning`.
   - Wraps `choc_WebView.h` similarly with a full `WebView` stub (Options + Resource + transparentBackground + acceptsFirstMouseClick + webviewIsReady + fetchResource), `bind()` template, **two `evaluateJavascript` overloads** (no-callback + templated callback) so any callback signature compiles, and a `createJUCEWebViewHolder()` returning an empty `std::unique_ptr<juce::Component>` (forward-declared).
   - In-place patches `cmaj_JUCEPlugin.h` to swap the unsupported `juce::JSON::FormatOptions(...)` call for the legacy `juce::JSON::toString(v, true)` boolean overload.
+
+### Fix 10 — Android APK launched then crashed silently (Feb 2026)
+- **Bug A — `ClassNotFoundException`:** `AndroidManifest.xml` declared `<activity android:name=".MainActivity"/>` but **no `MainActivity.java` file was ever created**, so Android failed to instantiate the activity on launch and killed the app instantly ("opens a window and immediately closes it").
+- **Bug B — wrong Java package path:** Workflow created `app/src/main/java/com/subfigames/logicalchaos/` but the `applicationId` is `com.subfigames.logicalchaos.melodymachine`; the last segment was missing.
+- **Bug C — no native lib loader:** Nothing called `System.loadLibrary("LogicalChaosMelodyMachine")`, so even if an activity had existed the JUCE/Cmajor shared library would never have loaded and all audio init code (C++ static constructors) would never have run.
+- **Bug D — AppCompat theme with no AppCompat wiring:** Manifest used `Theme.AppCompat.NoActionBar` but the activity didn't extend `AppCompatActivity`; this would have crashed in its own right once MainActivity existed.
+- **Fix:** Added `.github/android-templates/MainActivity.java` — minimal Activity that:
+  1. Attempts to load the native library from a list of candidate names and records which one succeeded.
+  2. Shows a dark status screen (app title + "Native engine loaded" or a visible error message) so any future crash is diagnosable instead of silent.
+- Fixed the Java package directory in the workflow to match the `applicationId` exactly.
+- Swapped `Theme.AppCompat.NoActionBar` → `@android:style/Theme.Material.NoActionBar` and removed the AppCompat Gradle dependency — no AndroidX wiring needed for the bootstrap screen.
+
+---
+- **Bug A:** `choc::messageloop` and `choc::ui::WebView` have no Android backend; NDK build fails with missing `postMessage`, `initialise`, `bind`, `Options` members, and incompatible `evaluateJavascript` callback signature.
+- **Bug B:** `cmaj_JUCEPlugin.h` calls `juce::JSON::toString(v, juce::JSON::FormatOptions().withSpacing(juce::JSON::Spacing::none))` — `FormatOptions` / `Spacing` were added in JUCE 7.0.10+, missing from the JUCE version Cmajor's Android export uses.
+- **Bug C:** `cmaj_JUCEPlugin.h` calls `choc::ui::createJUCEWebViewHolder(...)` — only defined in CHOC's desktop window helper, missing on Android.
+- **Fix:** `/app/.github/scripts/patch_android.py` now:
+  - Wraps `choc_MessageLoop.h` original content in `#else // not __ANDROID__` and injects an Android stub providing `initialise()`, `shutdown()`, `postMessage()`, `callerIsOnMessageThread()`, `Timer`, `run/stop/isRunning`.
+  - Wraps `choc_WebView.h` similarly with a full `WebView` stub (Options + Resource + transparentBackground + acceptsFirstMouseClick + webviewIsReady + fetchResource), `bind()` template, **two `evaluateJavascript` overloads** (no-callback + templated callback) so any callback signature compiles, and a `createJUCEWebViewHolder()` returning an empty `std::unique_ptr<juce::Component>` (forward-declared).
+  - In-place patches `cmaj_JUCEPlugin.h` to swap the unsupported `juce::JSON::FormatOptions(...)` call for the legacy `juce::JSON::toString(v, true)` boolean overload.
 - Verified locally with a synthetic test directory; awaiting CI re-run for end-to-end validation.
 
 ---

@@ -50,5 +50,10 @@ android {
 }
 
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
+    // No AppCompat required — MainActivity extends plain android.app.Activity
+    // and the manifest uses @android:style/Theme.Material.NoActionBar, so the
+    // runtime has zero third-party Java dependencies on first launch.  This
+    // keeps the bootstrap APK maximally simple while we iterate on the
+    // native audio engine.  Re-add AppCompat here if/when the WebView UI
+    // backlog task lands.
 }

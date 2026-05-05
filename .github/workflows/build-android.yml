@@ -151,7 +151,12 @@ jobs:
       - name: Create Android Studio Project Structure
         run: |
           mkdir -p AndroidProject/app/src/main/cpp
-          mkdir -p AndroidProject/app/src/main/java/com/subfigames/logicalchaos
+          # NOTE: the Java package path MUST match the applicationId
+          # (com.subfigames.logicalchaos.melodymachine) — if it's off by
+          # one segment, AndroidManifest's `.MainActivity` resolves to a
+          # class that doesn't exist and the app crashes on launch with
+          # ClassNotFoundException.
+          mkdir -p AndroidProject/app/src/main/java/com/subfigames/logicalchaos/melodymachine
           mkdir -p AndroidProject/app/src/main/res/values
 
           # Copy generated JUCE/Cmajor C++ code
@@ -193,11 +198,17 @@ jobs:
           cp "$TPLS/AndroidManifest.xml" AndroidProject/app/src/main/AndroidManifest.xml
           cp "$TPLS/strings.xml"         AndroidProject/app/src/main/res/values/strings.xml
 
+          # MainActivity: required by the <activity android:name=".MainActivity"/>
+          # declaration in AndroidManifest.xml.  Without this, Android throws
+          # ClassNotFoundException on launch and the app crashes instantly.
+          cp "$TPLS/MainActivity.java" \
+             AndroidProject/app/src/main/java/com/subfigames/logicalchaos/melodymachine/MainActivity.java
+
           touch AndroidProject/app/proguard-rules.pro
 
           echo "Gradle files copied:"
           find AndroidProject -name "*.gradle" -o -name "gradle.properties" \
-               -o -name "AndroidManifest.xml" | sort
+               -o -name "AndroidManifest.xml" -o -name "MainActivity.java" | sort
 
       # ------------------------------------------------------------------ #
       # 12. Install Gradle & create wrapper
