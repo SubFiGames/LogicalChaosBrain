@@ -32,3 +32,12 @@ local.properties
 gradle-wrapper.jar
 gradlew
 gradlew.bat
+-e 
+# Environment and credential files
+.env
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
