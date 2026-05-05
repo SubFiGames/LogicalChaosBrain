@@ -6,6 +6,7 @@ import android.graphics.Color;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.ViewGroup;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -13,85 +14,213 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Android entry point for Logical Chaos Melody Machine.
  *
- * Responsibilities:
- *   1. Load the Cmajor/JUCE native library (libLogicalChaosMelodyMachine_Standalone.so).
- *   2. Call native start → spins up the JUCE AudioProcessor and Oboe-backed
- *      AudioDeviceManager.  If that fails we show a readable status screen.
- *   3. Host a WebView that loads file:///android_asset/index.html which in
- *      turn imports view.js (the patch UI).  view.js talks to a `patchConnection`
- *      JS object injected by index.html, which forwards every call to the
- *      `AndroidHost` @JavascriptInterface bridge below — which in turn calls
- *      native methods implemented in android_bridge.cpp.
+ * Design goals (the app-crashes-silently problem)
+ * -----------------------------------------------
+ * The user testing this APK doesn't have adb access, so whenever the app
+ * dies we need to display the reason on the next launch.  We do this with
+ * two layers:
+ *
+ *   1. A Thread.UncaughtExceptionHandler that writes any Java stack trace
+ *      (including the UnsatisfiedLinkError / RuntimeException from a failed
+ *      native init) to {@code getFilesDir()/last-crash.log}.
+ *   2. A native-side signal handler (installed by the JNI bridge once we
+ *      pass it the crash-file path) that catches SIGSEGV / SIGABRT etc.
+ *      and records a short description into {@code native-crash.log} before
+ *      letting Android produce its normal tombstone.
+ *
+ * On every subsequent launch, if either file exists we show it on-screen
+ * and delete it.  Nothing is silent.
  */
 public class MainActivity extends Activity
 {
     private static final String TAG = "LogicalChaos";
 
-    // The native .so ships as the JUCE Standalone wrapper lib.  We don't
-    // actually use the standalone wrapper (we drive the processor ourselves
-    // from android_bridge.cpp) — we just need dlopen() to succeed so that
-    // C++ global constructors and our JNI functions are registered.
+    private static final String JAVA_CRASH_FILE   = "last-crash.log";
+    private static final String NATIVE_CRASH_FILE = "native-crash.log";
+
+    // Candidate shared-library names we might find in lib/.
     private static final String[] CANDIDATE_LIBS = {
         "LogicalChaosMelodyMachine",
         "LogicalChaosMelodyMachine_Standalone",
     };
 
-    private String  loadedLib  = null;
-    private String  loadError  = null;
-    private int     startError = -1;
-    private WebView webView    = null;
+    private String  loadedLib    = null;
+    private String  loadError    = null;
+    private String  startError   = null;
+    private boolean engineStarted = false;
+    private WebView webView      = null;
 
-    // --- Native methods (implemented in android_bridge.cpp) ------------------
-    private native int  nativeStart();
-    private native void nativeStop();
-    private native void nativeSendEvent     (String endpointID, double value);
-    private native void nativeSendParameter (String endpointID, float  value);
+    // --- Native methods (android_bridge.cpp) --------------------------------
+    private native void   nativeSetCrashLogPath (String path);
+    private native String nativeStart();                         // "" on success, error otherwise
+    private native void   nativeStop();
+    private native void   nativeSendEvent       (String endpointID, double value);
+    private native void   nativeSendParameter   (String endpointID, float  value);
 
+    //------------------------------------------------------------------------
     @Override
     protected void onCreate (Bundle savedInstanceState)
     {
         super.onCreate (savedInstanceState);
+        installJavaCrashHandler();
+
+        // If a previous run left a crash file, show it first and stop —
+        // don't re-trigger the same crash on the same device state.
+        String previousCrash = readAndDeletePreviousCrash();
+        if (previousCrash != null)
+        {
+            setContentView (buildScrollableStatusLayout (
+                "Previous launch crashed", previousCrash));
+            return;
+        }
 
         if (! tryLoadNativeLibrary())
         {
-            setContentView (buildStatusLayout ("Failed to load native library", loadError));
+            setContentView (buildScrollableStatusLayout (
+                "Failed to load native library", loadError));
             return;
+        }
+
+        // Tell native where to write crash reports.  Must happen before
+        // any other native call so the signal handlers are armed.
+        try
+        {
+            File dir = getFilesDir();
+            File nativeCrash = new File (dir, NATIVE_CRASH_FILE);
+            nativeSetCrashLogPath (nativeCrash.getAbsolutePath());
+        }
+        catch (Throwable t)
+        {
+            Log.w (TAG, "nativeSetCrashLogPath threw — continuing", t);
         }
 
         try
         {
             startError = nativeStart();
         }
-        catch (UnsatisfiedLinkError e)
+        catch (Throwable t)
         {
-            Log.e (TAG, "nativeStart link error", e);
-            setContentView (buildStatusLayout ("Native start symbol missing",
-                     "The .so loaded but Java_...nativeStart isn't exported:\n\n" + e.getMessage()));
-            return;
+            startError = stackTraceString (t);
         }
 
-        if (startError != 0)
+        if (startError == null || startError.isEmpty())
         {
-            setContentView (buildStatusLayout (
-                "Audio engine failed to start (code " + startError + ")",
-                "Check logcat tag '" + TAG + "Native' for details."));
-            return;
+            engineStarted = true;
+            setContentView (buildWebViewLayout());
         }
-
-        setContentView (buildWebViewLayout());
+        else
+        {
+            setContentView (buildScrollableStatusLayout (
+                "Audio engine failed to start", startError));
+        }
     }
 
     @Override
     protected void onDestroy()
     {
-        try { if (startError == 0) nativeStop(); }
+        try { if (engineStarted) nativeStop(); }
         catch (Throwable t) { Log.e (TAG, "nativeStop failed", t); }
         super.onDestroy();
+    }
+
+    //------------------------------------------------------------------------
+    // Java crash plumbing
+    //------------------------------------------------------------------------
+    private void installJavaCrashHandler()
+    {
+        final Thread.UncaughtExceptionHandler prev =
+            Thread.getDefaultUncaughtExceptionHandler();
+
+        Thread.setDefaultUncaughtExceptionHandler ((t, e) ->
+        {
+            try
+            {
+                File f = new File (getFilesDir(), JAVA_CRASH_FILE);
+                FileOutputStream os = new FileOutputStream (f);
+                PrintStream ps = new PrintStream (os, true,
+                                                  StandardCharsets.UTF_8.name());
+                ps.println ("Thread: " + t.getName());
+                ps.println ("Time:   " + System.currentTimeMillis());
+                ps.println();
+                e.printStackTrace (ps);
+                ps.close();
+            }
+            catch (Throwable io)
+            {
+                Log.e (TAG, "Couldn't write Java crash file", io);
+            }
+            if (prev != null) prev.uncaughtException (t, e);
+        });
+    }
+
+    private String readAndDeletePreviousCrash()
+    {
+        String java   = readAndDelete (new File (getFilesDir(), JAVA_CRASH_FILE));
+        String native_ = readAndDelete (new File (getFilesDir(), NATIVE_CRASH_FILE));
+
+        if (java == null && native_ == null) return null;
+
+        StringBuilder sb = new StringBuilder();
+        if (native_ != null)
+        {
+            sb.append ("=== Native ===\n").append (native_).append ("\n\n");
+        }
+        if (java != null)
+        {
+            sb.append ("=== Java ===\n").append (java);
+        }
+        return sb.toString();
+    }
+
+    private static String readAndDelete (File f)
+    {
+        if (! f.exists()) return null;
+        try
+        {
+            java.io.FileInputStream in = new java.io.FileInputStream (f);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read (buf)) > 0) bos.write (buf, 0, n);
+            in.close();
+            return new String (bos.toByteArray(), StandardCharsets.UTF_8);
+        }
+        catch (IOException e)
+        {
+            return "Could not read " + f.getName() + ": " + e.getMessage();
+        }
+        finally
+        {
+            //noinspection ResultOfMethodCallIgnored
+            f.delete();
+        }
+    }
+
+    private static String stackTraceString (Throwable t)
+    {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try
+        {
+            PrintStream ps = new PrintStream (bos, true,
+                                              StandardCharsets.UTF_8.name());
+            t.printStackTrace (ps);
+            ps.close();
+        }
+        catch (Throwable ignore) { return String.valueOf (t); }
+        return bos.toString();
     }
 
     //------------------------------------------------------------------------
@@ -117,14 +246,14 @@ public class MainActivity extends Activity
     }
 
     //------------------------------------------------------------------------
-    // Diagnostic fallback screen (only shown if something goes wrong).
-    private LinearLayout buildStatusLayout (String headline, String body)
+    private ScrollView buildScrollableStatusLayout (String headline, String body)
     {
+        ScrollView sv = new ScrollView (this);
+        sv.setBackgroundColor (Color.parseColor ("#0d0d12"));
+
         LinearLayout root = new LinearLayout (this);
         root.setOrientation (LinearLayout.VERTICAL);
-        root.setGravity (Gravity.CENTER);
-        root.setBackgroundColor (Color.parseColor ("#0d0d12"));
-        root.setPadding (48, 48, 48, 48);
+        root.setPadding (48, 96, 48, 96);
 
         TextView t1 = new TextView (this);
         t1.setText ("Logical Chaos Melody Machine");
@@ -137,16 +266,21 @@ public class MainActivity extends Activity
         t2.setTextColor (Color.parseColor ("#ff8080"));
         t2.setTextSize (14);
         t2.setPadding (0, 0, 0, 16);
-        t2.setText (headline);
+        t2.setText (headline == null ? "" : headline);
         root.addView (t2);
 
         TextView t3 = new TextView (this);
         t3.setTextColor (Color.parseColor ("#9999b3"));
         t3.setTextSize (12);
-        t3.setText (body == null ? "" : body);
+        t3.setTypeface (android.graphics.Typeface.MONOSPACE);
+        t3.setText (body == null ? "(no details)" : body);
+        t3.setTextIsSelectable (true);
         root.addView (t3);
 
-        return root;
+        sv.addView (root, new ViewGroup.LayoutParams (
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT));
+        return sv;
     }
 
     //------------------------------------------------------------------------
@@ -209,7 +343,7 @@ public class MainActivity extends Activity
         @JavascriptInterface
         public String getNativeStatus()
         {
-            return "lib=" + loadedLib + "; startCode=" + startError;
+            return "lib=" + loadedLib + "; started=" + engineStarted;
         }
     }
 }
