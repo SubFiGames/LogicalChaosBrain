@@ -235,6 +235,12 @@ jobs:
 
           echo "Gradle files created"
 
+      - name: Install Gradle
+        run: |
+          wget https://services.gradle.org/distributions/gradle-8.2-bin.zip
+          unzip -q gradle-8.2-bin.zip
+          echo "${{ github.workspace }}/gradle-8.2/bin" >> $GITHUB_PATH
+
       - name: Create Gradle Wrapper
         run: |
           cd AndroidProject
