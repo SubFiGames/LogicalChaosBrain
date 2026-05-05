@@ -161,7 +161,26 @@ jobs:
           find AndroidProject/app/src/main/cpp -type f | head -20
 
       # ------------------------------------------------------------------ #
-      # 10. Copy Gradle build files from templates stored in the repo
+      # 10. Patch CHOC headers for Android
+      #
+      # The Cmajor JUCE target uses CHOC's WebView/MessageLoop which
+      # hard-errors on Android (CHOC detects __linux__ from the NDK target
+      # triple "aarch64-linux-android" and tries to use X11/GTK code that
+      # doesn't exist on Android).
+      #
+      # patch_android.py wraps the original file content in
+      #   #else  // not Android
+      # and injects no-op Android stubs above it, so:
+      #   - Android: gets clean stubs (no CHOC UI, but audio works)
+      #   - Desktop: gets the original CHOC implementation unchanged
+      # ------------------------------------------------------------------ #
+      - name: Patch CHOC Headers for Android
+        run: |
+          python3 .github/scripts/patch_android.py \
+            AndroidProject/app/src/main/cpp
+
+      # ------------------------------------------------------------------ #
+      # 11. Copy Gradle build files from templates stored in the repo
       # ------------------------------------------------------------------ #
       - name: Copy Gradle Build Files
         run: |
@@ -181,7 +200,7 @@ jobs:
                -o -name "AndroidManifest.xml" | sort
 
       # ------------------------------------------------------------------ #
-      # 11. Install Gradle & create wrapper
+      # 12. Install Gradle & create wrapper
       # ------------------------------------------------------------------ #
       - name: Install Gradle 8.4
         run: |
@@ -197,7 +216,7 @@ jobs:
           chmod +x gradlew
 
       # ------------------------------------------------------------------ #
-      # 12. Build APK
+      # 13. Build APK
       # ------------------------------------------------------------------ #
       - name: Build APK with Gradle
         run: |
