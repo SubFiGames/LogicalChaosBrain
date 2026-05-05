@@ -170,10 +170,38 @@
 
 /*
  * Load view.js and mount the patch view.  view.js exports createPatchView().
+ *
+ * Android WebView blocks ES-module `import()` from `file://` URLs
+ * (Chromium treats every file:// URL as a unique origin).  We keep the
+ * desktop-friendly direct import as the happy path and fall back to a
+ * blob-URL re-import — blob URLs share the page's origin and ARE allowed
+ * to be imported as modules.
  */
+async function loadViewModule () {
+  // Happy path (desktop CHOC WebView etc.)
+  try {
+    return await import ('./view.js');
+  } catch (e1) {
+    console.warn ('Direct import of view.js failed, retrying via blob URL:', e1);
+  }
+
+  // Fallback: fetch the source text, wrap in a Blob, import that URL.
+  const resp = await fetch ('./view.js');
+  if (! resp.ok) throw new Error ('fetch view.js -> HTTP ' + resp.status);
+  const text = await resp.text();
+  const blob = new Blob ([text], { type: 'application/javascript' });
+  const url  = URL.createObjectURL (blob);
+  try {
+    return await import (url);
+  } finally {
+    // Free the blob even if import threw.
+    URL.revokeObjectURL (url);
+  }
+}
+
 (async function mount () {
   try {
-    const mod = await import ('./view.js');
+    const mod = await loadViewModule();
     const create = mod.default || mod.createPatchView;
     if (typeof create !== 'function') {
       document.getElementById ('root').textContent =
