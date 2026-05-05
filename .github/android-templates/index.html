@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Logical Chaos Melody Machine</title>
+  <style>
+    html, body { margin:0; padding:0; width:100%; height:100%; background:#0d0d12; color:#e0e0ff;
+                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                 -webkit-user-select: none; user-select: none; overflow: hidden; }
+    #root { width:100%; height:100%; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+/*
+ * Bridge: expose a patchConnection object that view.js can use.
+ * Every call is forwarded to the Android host via the @JavascriptInterface
+ * bound as `AndroidHost` in MainActivity.
+ */
+(function () {
+  const host = window.AndroidHost || {};
+  const listeners = new Map();  // endpointID -> [fn, ...]
+
+  function notifyListeners (endpointID, value) {
+    const arr = listeners.get (endpointID);
+    if (arr) for (const fn of arr) { try { fn (value); } catch (e) { console.error (e); } }
+  }
+
+  const connection = {
+    // Outgoing --------------------------------------------------------------
+    sendEventOrValue (endpointID, value) {
+      const v = typeof value === 'number' ? value : (value ? 1 : 0);
+      try { host.sendEvent (String (endpointID), v); } catch (e) { console.warn (e); }
+    },
+    sendParameterGestureStart (id) { /* no-op on mobile */ },
+    sendParameterGestureEnd   (id) { /* no-op on mobile */ },
+    requestParameterValue     (id) { /* no-op: we don't round-trip state yet */ },
+    requestStatusUpdate       ()   { /* no-op */ },
+    requestStoredStateValue   (k)  { /* no-op */ },
+    sendStoredStateValue      (k,v){ /* no-op */ },
+    sendMIDIInputEvent        ()   { /* no-op */ },
+    sendFullStoredState       ()   { /* no-op */ },
+    requestFullStoredState    ()   { /* no-op */ },
+
+    // Incoming listeners (plumbing only — engine→JS events are a future
+    // enhancement; the UI will still render and send events correctly).
+    addEndpointListener       (id, fn) {
+      if (!listeners.has (id)) listeners.set (id, []);
+      listeners.get (id).push (fn);
+    },
+    removeEndpointListener    (id, fn) {
+      const arr = listeners.get (id);
+      if (!arr) return;
+      const i = arr.indexOf (fn);
+      if (i >= 0) arr.splice (i, 1);
+    },
+    addAllParameterListener    () {},
+    removeAllParameterListener () {},
+    addStoredStateValueListener    () {},
+    removeStoredStateValueListener () {},
+    addStatusListener    () {},
+    removeStatusListener () {},
+
+    getResourceAddress (relative) {
+      // view.js sometimes asks for an absolute URL for auxiliary assets.
+      // All our assets are co-located next to index.html in /assets.
+      return relative;
+    },
+
+    // Hook for native -> JS (optional, called by future JNI callbacks).
+    _receiveEvent: notifyListeners,
+  };
+
+  // Expose for view.js to pick up.
+  window.patchConnection = connection;
+})();
+
+/*
+ * Load view.js and mount the patch view.  view.js exports createPatchView().
+ */
+(async function mount () {
+  try {
+    const mod = await import ('./view.js');
+    const create = mod.default || mod.createPatchView;
+    if (typeof create !== 'function') {
+      document.getElementById ('root').textContent =
+        'view.js loaded but createPatchView is not exported.';
+      return;
+    }
+    const view = await create (window.patchConnection);
+    if (view) document.getElementById ('root').appendChild (view);
+  } catch (err) {
+    console.error (err);
+    const root = document.getElementById ('root');
+    root.innerHTML = '<div style="padding:24px;">'
+      + '<h2>Logical Chaos Melody Machine</h2>'
+      + '<p style="color:#ff8080;">Failed to load view.js:</p>'
+      + '<pre style="white-space:pre-wrap;color:#ff8080;">' + String (err && (err.stack || err.message || err)) + '</pre>'
+      + '</div>';
+  }
+})();
+</script>
+</body>
+</html>

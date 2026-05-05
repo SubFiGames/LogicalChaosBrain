@@ -99,6 +99,20 @@ view.js                    ← plugin UI (JS, exported as createPatchView)
   - Wraps `choc_WebView.h` similarly with a full `WebView` stub (Options + Resource + transparentBackground + acceptsFirstMouseClick + webviewIsReady + fetchResource), `bind()` template, **two `evaluateJavascript` overloads** (no-callback + templated callback) so any callback signature compiles, and a `createJUCEWebViewHolder()` returning an empty `std::unique_ptr<juce::Component>` (forward-declared).
   - In-place patches `cmaj_JUCEPlugin.h` to swap the unsupported `juce::JSON::FormatOptions(...)` call for the legacy `juce::JSON::toString(v, true)` boolean overload.
 - Verified locally with a synthetic test directory; awaiting CI re-run for end-to-end validation.
+- **Verified on device (Feb 2026):** user confirmed APK launches and shows "Native engine loaded: libLogicalChaosMelodyMachine_Standalone.so".
+
+### Fix 11 — Full audio + WebView UI pipeline (Feb 2026)
+- **Goal:** Turn the bootstrap APK into a playable synth + UI, not just a status screen.
+- **Added:** `.github/android-templates/android_bridge.cpp` — JNI bridge exposing:
+  - `nativeStart()` → creates JUCE processor via `createPluginFilter()`, brings up `juce::AudioDeviceManager` (Oboe-backed on Android), wires them together with `juce::AudioProcessorPlayer`.
+  - `nativeStop()` → tears the graph down cleanly on `onDestroy`.
+  - `nativeSendEvent(id, value)` / `nativeSendParameter(id, value)` → forwarded from the WebView's JS bridge. Cmajor event endpoints are fired as momentary parameter gestures (rising edge).
+  - All parameters logged to logcat (`LogicalChaosNative` tag) on start so we can see what the Cmajor patch exposes.
+- **Added:** `.github/android-templates/index.html` — wrapper that defines a `patchConnection` shim routing to the Android `AndroidHost` `@JavascriptInterface`, then dynamically imports and mounts `view.js`.
+- **Added:** `.github/android-templates/cmake-android-jni-append.cmake` — template appended to the Cmajor-generated `CMakeLists.txt`; auto-detects the JUCE target name, attaches `android_bridge.cpp` to the `_Standalone` sub-target, links `log` + `android` libs.
+- **Rewrote:** `MainActivity.java` — hosts a full-screen `WebView` loading `file:///android_asset/index.html` on success; falls back to a readable diagnostic screen if `nativeStart()` returns non-zero or throws `UnsatisfiedLinkError`. WebView has a `WebChromeClient` that pipes JS `console.*` calls to logcat (`LogicalChaosWebView` tag).
+- **Workflow:** copies `view.js` + `index.html` to `app/src/main/assets/`, copies the JNI bridge C++ into `cpp/`, runs the CMake patcher right after the CHOC patcher.
+- **Status:** Built, awaiting on-device verification.
 
 ---
 

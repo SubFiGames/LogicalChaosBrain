@@ -158,12 +158,24 @@ jobs:
           # ClassNotFoundException.
           mkdir -p AndroidProject/app/src/main/java/com/subfigames/logicalchaos/melodymachine
           mkdir -p AndroidProject/app/src/main/res/values
+          mkdir -p AndroidProject/app/src/main/assets
 
           # Copy generated JUCE/Cmajor C++ code
           cp -r GeneratedApp/* AndroidProject/app/src/main/cpp/
 
+          # Copy the JNI bridge that drives the audio engine from Java.
+          cp .github/android-templates/android_bridge.cpp \
+             AndroidProject/app/src/main/cpp/android_bridge.cpp
+
+          # Copy the WebView UI assets (view.js + index.html wrapper).
+          cp view.js   AndroidProject/app/src/main/assets/view.js
+          cp .github/android-templates/index.html \
+             AndroidProject/app/src/main/assets/index.html
+
           echo "C++ source files:"
-          find AndroidProject/app/src/main/cpp -type f | head -20
+          find AndroidProject/app/src/main/cpp -maxdepth 2 -type f | head -20
+          echo "Assets:"
+          ls -la AndroidProject/app/src/main/assets/
 
       # ------------------------------------------------------------------ #
       # 10. Patch CHOC headers for Android
@@ -183,6 +195,37 @@ jobs:
         run: |
           python3 .github/scripts/patch_android.py \
             AndroidProject/app/src/main/cpp
+
+      # ------------------------------------------------------------------ #
+      # 10b. Wire our JNI bridge into the generated CMakeLists.txt.
+      #
+      # The Cmajor JUCE export creates a JUCE plugin target (e.g.
+      # LogicalChaosMelodyMachine) with _Standalone, _VST3 etc. sub-targets.
+      # On Android only Standalone is meaningful.  We append android_bridge.cpp
+      # to the Standalone target so our JNI symbols end up in the same .so
+      # that MainActivity loads (lib<APP>_Standalone.so).
+      # ------------------------------------------------------------------ #
+      - name: Patch CMakeLists.txt to include Android JNI bridge
+        run: |
+          CMK="AndroidProject/app/src/main/cpp/CMakeLists.txt"
+          TPL=".github/android-templates/cmake-android-jni-append.cmake"
+          if [ ! -f "$CMK" ]; then echo "ERROR: $CMK not found"; exit 1; fi
+          if [ ! -f "$TPL" ]; then echo "ERROR: $TPL not found"; exit 1; fi
+
+          # Detect the JUCE target name from the generated CMakeLists.  Cmajor's
+          # JUCE export calls juce_add_plugin(<TARGET> ...).
+          JUCE_TARGET=$(grep -oE 'juce_add_plugin\s*\(\s*[A-Za-z_][A-Za-z0-9_]*' "$CMK" \
+                        | head -1 | awk -F'[(]' '{print $2}' | tr -d ' ')
+          if [ -z "$JUCE_TARGET" ]; then
+            JUCE_TARGET="${{ env.APP_NAME }}"
+            echo "WARN: juce_add_plugin() target not found — defaulting to '$JUCE_TARGET'"
+          fi
+          echo "Detected JUCE target: $JUCE_TARGET"
+
+          # Substitute @JUCE_TARGET@ and append.
+          sed "s/@JUCE_TARGET@/${JUCE_TARGET}/g" "$TPL" >> "$CMK"
+          echo "CMakeLists.txt now ends with:"
+          tail -25 "$CMK"
 
       # ------------------------------------------------------------------ #
       # 11. Copy Gradle build files from templates stored in the repo

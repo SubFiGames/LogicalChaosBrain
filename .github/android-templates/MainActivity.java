@@ -1,66 +1,103 @@
 package com.subfigames.logicalchaos.melodymachine;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Gravity;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
 /**
- * Minimal bootstrap Activity for the Logical Chaos Melody Machine
- * Android build.
+ * Android entry point for Logical Chaos Melody Machine.
  *
- * This exists because the Cmajor/JUCE CMake export produces only a
- * native shared library ({@code libLogicalChaosMelodyMachine.so}).
- * Android still needs a Java entry-point class that matches the
- * {@code <activity android:name=".MainActivity"/>} declaration in
- * {@code AndroidManifest.xml} — otherwise the OS throws
- * {@code ClassNotFoundException} and kills the app on launch.
- *
- * Current scope:
- *   1. Load the native library so the JUCE/Cmajor audio engine
- *      initializes (global C++ constructors run at dlopen time).
- *   2. Display a visible status screen — this turns silent crashes
- *      into readable messages, which is critical while we iterate
- *      on the native build.
- *
- * Backlog (tracked in PRD.md): wire this activity up to a proper
- * WebView that loads {@code view.js} so the patch UI is usable.
+ * Responsibilities:
+ *   1. Load the Cmajor/JUCE native library (libLogicalChaosMelodyMachine_Standalone.so).
+ *   2. Call native start → spins up the JUCE AudioProcessor and Oboe-backed
+ *      AudioDeviceManager.  If that fails we show a readable status screen.
+ *   3. Host a WebView that loads file:///android_asset/index.html which in
+ *      turn imports view.js (the patch UI).  view.js talks to a `patchConnection`
+ *      JS object injected by index.html, which forwards every call to the
+ *      `AndroidHost` @JavascriptInterface bridge below — which in turn calls
+ *      native methods implemented in android_bridge.cpp.
  */
 public class MainActivity extends Activity
 {
     private static final String TAG = "LogicalChaos";
 
-    // JUCE generates the shared library using the target name set in
-    // its CMakeLists.txt.  With JUCE_SHARED_CODE=1 + standalone target
-    // the common names are:
-    //   libLogicalChaosMelodyMachine.so          (the main target)
-    //   libLogicalChaosMelodyMachine_Standalone.so (standalone wrapper)
-    // Try each candidate in order and remember which one succeeded.
+    // The native .so ships as the JUCE Standalone wrapper lib.  We don't
+    // actually use the standalone wrapper (we drive the processor ourselves
+    // from android_bridge.cpp) — we just need dlopen() to succeed so that
+    // C++ global constructors and our JNI functions are registered.
     private static final String[] CANDIDATE_LIBS = {
         "LogicalChaosMelodyMachine",
         "LogicalChaosMelodyMachine_Standalone",
-        "juce_jni"
     };
 
-    private String loadedLib   = null;
-    private String loadError   = null;
+    private String  loadedLib  = null;
+    private String  loadError  = null;
+    private int     startError = -1;
+    private WebView webView    = null;
+
+    // --- Native methods (implemented in android_bridge.cpp) ------------------
+    private native int  nativeStart();
+    private native void nativeStop();
+    private native void nativeSendEvent     (String endpointID, double value);
+    private native void nativeSendParameter (String endpointID, float  value);
 
     @Override
     protected void onCreate (Bundle savedInstanceState)
     {
         super.onCreate (savedInstanceState);
 
-        tryLoadNativeLibrary();
-        setContentView (buildStatusLayout());
+        if (! tryLoadNativeLibrary())
+        {
+            setContentView (buildStatusLayout ("Failed to load native library", loadError));
+            return;
+        }
+
+        try
+        {
+            startError = nativeStart();
+        }
+        catch (UnsatisfiedLinkError e)
+        {
+            Log.e (TAG, "nativeStart link error", e);
+            setContentView (buildStatusLayout ("Native start symbol missing",
+                     "The .so loaded but Java_...nativeStart isn't exported:\n\n" + e.getMessage()));
+            return;
+        }
+
+        if (startError != 0)
+        {
+            setContentView (buildStatusLayout (
+                "Audio engine failed to start (code " + startError + ")",
+                "Check logcat tag '" + TAG + "Native' for details."));
+            return;
+        }
+
+        setContentView (buildWebViewLayout());
     }
 
-    private void tryLoadNativeLibrary()
+    @Override
+    protected void onDestroy()
+    {
+        try { if (startError == 0) nativeStop(); }
+        catch (Throwable t) { Log.e (TAG, "nativeStop failed", t); }
+        super.onDestroy();
+    }
+
+    //------------------------------------------------------------------------
+    private boolean tryLoadNativeLibrary()
     {
         StringBuilder errors = new StringBuilder();
-
         for (String name : CANDIDATE_LIBS)
         {
             try
@@ -68,19 +105,20 @@ public class MainActivity extends Activity
                 System.loadLibrary (name);
                 loadedLib = name;
                 Log.i (TAG, "Loaded native library: " + name);
-                return;
+                return true;
             }
             catch (UnsatisfiedLinkError | SecurityException e)
             {
-                Log.w (TAG, "Could not load lib" + name + ".so: " + e.getMessage());
                 errors.append (name).append (": ").append (e.getMessage()).append ('\n');
             }
         }
-
         loadError = errors.toString();
+        return false;
     }
 
-    private LinearLayout buildStatusLayout()
+    //------------------------------------------------------------------------
+    // Diagnostic fallback screen (only shown if something goes wrong).
+    private LinearLayout buildStatusLayout (String headline, String body)
     {
         LinearLayout root = new LinearLayout (this);
         root.setOrientation (LinearLayout.VERTICAL);
@@ -88,30 +126,90 @@ public class MainActivity extends Activity
         root.setBackgroundColor (Color.parseColor ("#0d0d12"));
         root.setPadding (48, 48, 48, 48);
 
-        TextView title = new TextView (this);
-        title.setText ("Logical Chaos Melody Machine");
-        title.setTextColor (Color.parseColor ("#e0e0ff"));
-        title.setTextSize (22);
-        title.setPadding (0, 0, 0, 24);
-        root.addView (title);
+        TextView t1 = new TextView (this);
+        t1.setText ("Logical Chaos Melody Machine");
+        t1.setTextColor (Color.parseColor ("#e0e0ff"));
+        t1.setTextSize (22);
+        t1.setPadding (0, 0, 0, 24);
+        root.addView (t1);
 
-        TextView status = new TextView (this);
-        status.setTextColor (Color.parseColor ("#9999b3"));
-        status.setTextSize (14);
+        TextView t2 = new TextView (this);
+        t2.setTextColor (Color.parseColor ("#ff8080"));
+        t2.setTextSize (14);
+        t2.setPadding (0, 0, 0, 16);
+        t2.setText (headline);
+        root.addView (t2);
 
-        if (loadedLib != null)
-        {
-            status.setText ("Native engine loaded: lib" + loadedLib + ".so\n\n"
-                          + "Audio DSP is running in the background.\n"
-                          + "UI (WebView) is a pending backlog item.");
-        }
-        else
-        {
-            status.setTextColor (Color.parseColor ("#ff8080"));
-            status.setText ("Failed to load native library.\n\nAttempts:\n" + loadError);
-        }
-        root.addView (status);
+        TextView t3 = new TextView (this);
+        t3.setTextColor (Color.parseColor ("#9999b3"));
+        t3.setTextSize (12);
+        t3.setText (body == null ? "" : body);
+        root.addView (t3);
 
         return root;
+    }
+
+    //------------------------------------------------------------------------
+    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
+    private FrameLayout buildWebViewLayout()
+    {
+        FrameLayout container = new FrameLayout (this);
+        container.setBackgroundColor (Color.parseColor ("#0d0d12"));
+
+        webView = new WebView (this);
+        webView.setBackgroundColor (Color.parseColor ("#0d0d12"));
+
+        WebSettings s = webView.getSettings();
+        s.setJavaScriptEnabled (true);
+        s.setDomStorageEnabled (true);
+        s.setAllowFileAccess (true);
+        s.setAllowContentAccess (true);
+        s.setMediaPlaybackRequiresUserGesture (false);
+
+        webView.setWebViewClient (new WebViewClient());
+        webView.setWebChromeClient (new WebChromeClient()
+        {
+            @Override
+            public boolean onConsoleMessage (android.webkit.ConsoleMessage cm)
+            {
+                Log.i (TAG + "WebView",
+                       cm.sourceId() + ":" + cm.lineNumber() + " " + cm.message());
+                return true;
+            }
+        });
+
+        webView.addJavascriptInterface (new AndroidHost(), "AndroidHost");
+        webView.loadUrl ("file:///android_asset/index.html");
+
+        container.addView (webView, new FrameLayout.LayoutParams (
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT));
+        return container;
+    }
+
+    //------------------------------------------------------------------------
+    // JS<->native bridge.  Every public @JavascriptInterface method is
+    // callable as `AndroidHost.<name>(...)` from the WebView's JS.
+    private class AndroidHost
+    {
+        @JavascriptInterface
+        public void sendEvent (String endpointID, double value)
+        {
+            try { nativeSendEvent (endpointID, value); }
+            catch (Throwable t) { Log.e (TAG, "sendEvent failed", t); }
+        }
+
+        @JavascriptInterface
+        public void sendParameter (String endpointID, float value)
+        {
+            try { nativeSendParameter (endpointID, value); }
+            catch (Throwable t) { Log.e (TAG, "sendParameter failed", t); }
+        }
+
+        @JavascriptInterface
+        public String getNativeStatus()
+        {
+            return "lib=" + loadedLib + "; startCode=" + startError;
+        }
     }
 }
