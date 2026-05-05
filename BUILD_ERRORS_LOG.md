@@ -32,21 +32,30 @@ libwebkit2gtk-4.0.so.37: cannot open shared object file: No such file or directo
 - Cmajor CLI requires WebKit2GTK library
 - Not installed by default on GitHub Actions Ubuntu runners
 
-**Fix:**
-- Added `libwebkit2gtk-4.0-37` to apt-get install
-- Added `libgtk-3-0` for GTK support
-
-**Before:**
-```yaml
-sudo apt-get install -y cmake ninja-build pkg-config
+**Error 2b: Package Not Found ✅ FIXED**
+```
+E: Unable to locate package libwebkit2gtk-4.0-37
 ```
 
-**After:**
+**Cause:**
+- Ubuntu 24.04+ (used by GitHub Actions) no longer provides webkit2gtk 4.0
+- Migrated to webkit2gtk 4.1
+
+**Fix:**
+- Use `libwebkit2gtk-4.1-dev` instead of `libwebkit2gtk-4.0-37`
+- Use `libgtk-3-dev` for development headers
+
+**Before:**
 ```yaml
 sudo apt-get install -y cmake ninja-build pkg-config libwebkit2gtk-4.0-37 libgtk-3-0
 ```
 
-**Commit:** `d9e93d4`
+**After:**
+```yaml
+sudo apt-get install -y cmake ninja-build pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev
+```
+
+**Commit:** `a9f97e8` (updated from `d9e93d4`)
 
 ---
 
