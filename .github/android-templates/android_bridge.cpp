@@ -257,6 +257,13 @@ public:
                 return createErr;
         }
 
+        if (processor_ == nullptr)
+        {
+            auto createErr = create();
+            if (! createErr.empty())
+                return createErr;
+        }
+
         try
         {
             const auto sr = processor_->getSampleRate() > 0
