@@ -10,291 +10,228 @@ on:
 env:
   PATCH_FILE: "LogicalChaos.cmajorpatch"
   APP_NAME: "LogicalChaosMelodyMachine"
-  JAVA_VERSION: '17'
+  JAVA_VERSION: "17"
+  # NDK r25c == 25.2.9519653  (must match ndkVersion in app-build.gradle)
+  NDK_VERSION: "r25c"
+  NDK_FULL_VERSION: "25.2.9519653"
 
 jobs:
   build:
     name: Build Android APK
-    runs-on: ubuntu-latest
+    # ubuntu-22.04 ships libwebkit2gtk-4.0 which the Cmajor CLI binary requires.
+    # ubuntu-latest (24.04) dropped that library, causing the CLI to crash on load.
+    runs-on: ubuntu-22.04
 
     steps:
+      # ------------------------------------------------------------------ #
+      # 1. Source checkout
+      # ------------------------------------------------------------------ #
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # ------------------------------------------------------------------ #
+      # 2. Java
+      # ------------------------------------------------------------------ #
       - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
         with:
           java-version: ${{ env.JAVA_VERSION }}
-          distribution: 'temurin'
+          distribution: "temurin"
 
+      # ------------------------------------------------------------------ #
+      # 3. Android SDK  (no NDK here — handled by nttld/setup-ndk below)
+      # ------------------------------------------------------------------ #
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          cmdline-tools-version: 11076708
-          packages: 'platforms;android-33 build-tools;33.0.0 platform-tools'
+          packages: >-
+            platforms;android-33
+            build-tools;33.0.2
+            platform-tools
 
-      - name: Setup Android NDK
+      # ------------------------------------------------------------------ #
+      # 4. Android NDK r25c = 25.2.9519653
+      # ------------------------------------------------------------------ #
+      - name: Setup Android NDK ${{ env.NDK_VERSION }}
+        id: setup-ndk
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r25c
+          ndk-version: ${{ env.NDK_VERSION }}
           add-to-path: true
           link-to-sdk: true
 
-      - name: Verify Android SDK Installation
+      - name: Verify Android SDK + NDK
         run: |
-          echo "ANDROID_HOME: $ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT: $ANDROID_SDK_ROOT"
-          echo "ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
-          which sdkmanager || echo "sdkmanager not in PATH"
-          ls -la $ANDROID_HOME 2>/dev/null || echo "ANDROID_HOME not found"
+          echo "ANDROID_HOME       : $ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT   : $ANDROID_SDK_ROOT"
+          echo "ANDROID_NDK_HOME   : $ANDROID_NDK_HOME"
+          echo "NDK path (nttld)   : ${{ steps.setup-ndk.outputs.ndk-path }}"
 
+      # ------------------------------------------------------------------ #
+      # 5. Build dependencies
+      #    webkit2gtk-4.0 is pre-installed on ubuntu-22.04.
+      # ------------------------------------------------------------------ #
       - name: Install Build Dependencies
         run: |
-          sudo apt-get update
-          
-          # Install build tools and WebKit 4.1 for newer dependencies
-          sudo apt-get install -y cmake ninja-build pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev
-          
-          # Add Ubuntu 22.04 repository for old WebKit 4.0 and other dependencies (needed by Cmajor CLI binary)
-          echo "deb http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/jammy.list
-          sudo apt-get update
-          
-          # Install all Cmajor CLI runtime dependencies
+          sudo apt-get update -q
           sudo apt-get install -y \
-            libwebkit2gtk-4.0-37 \
-            libjack-jackd2-0 \
-            libjack0 \
-            libasound2 \
-            libcurl4 \
-            libpulse0 \
-            libfreetype6 \
-            || true
-          
-          # Clean up to avoid conflicts
-          sudo rm /etc/apt/sources.list.d/jammy.list
-          sudo apt-get update
+            cmake ninja-build pkg-config \
+            libwebkit2gtk-4.0-dev libgtk-3-dev \
+            libasound2-dev libpulse-dev \
+            libfreetype6 libcurl4
 
+      # ------------------------------------------------------------------ #
+      # 6. JUCE Framework — pinned to stable release
+      # ------------------------------------------------------------------ #
       - name: Checkout JUCE Framework
         uses: actions/checkout@v4
         with:
           repository: juce-framework/JUCE
-          ref: master
+          ref: "7.0.9"
+          fetch-depth: 1
           path: JUCE
 
+      # ------------------------------------------------------------------ #
+      # 7. Cmajor CLI
+      # ------------------------------------------------------------------ #
       - name: Download and Install Cmajor CLI
         run: |
-          # Download appropriate architecture
           ARCH=$(uname -m)
-          if [ "$ARCH" = "x86_64" ]; then
-            CMAJ_ARCH="x64"
-          elif [ "$ARCH" = "aarch64" ]; then
-            CMAJ_ARCH="arm64"
-          else
-            CMAJ_ARCH="x64"  # default to x64
-          fi
-          
-          wget https://github.com/cmajor-lang/cmajor/releases/latest/download/cmajor.linux.${CMAJ_ARCH}.zip -O cmajor.zip
-          unzip cmajor.zip -d cmajor-cli
+          case "$ARCH" in
+            x86_64)  CMAJ_ARCH="x64"   ;;
+            aarch64) CMAJ_ARCH="arm64" ;;
+            *)       CMAJ_ARCH="x64"   ;;
+          esac
+          echo "Architecture: $ARCH  ->  Cmajor package: $CMAJ_ARCH"
+
+          wget -q \
+            "https://github.com/cmajor-lang/cmajor/releases/latest/download/cmajor.linux.${CMAJ_ARCH}.zip" \
+            -O cmajor.zip
+          unzip -q cmajor.zip -d cmajor-cli
+
           find cmajor-cli -name "cmaj" -type f -exec chmod +x {} \;
-          
-          # Find and add cmaj to PATH
           CMAJ_BIN=$(find cmajor-cli -name "cmaj" -type f | head -1)
-          CMAJ_DIR=$(dirname "$CMAJ_BIN")
-          echo "$CMAJ_DIR" >> $GITHUB_PATH
-          echo "CMAJ_PATH=$CMAJ_BIN" >> $GITHUB_ENV
+          echo "$(dirname "$CMAJ_BIN")" >> "$GITHUB_PATH"
+          echo "Cmajor binary: $CMAJ_BIN"
 
-      - name: Verify Cmajor Installation
+      - name: Verify Cmajor CLI
         run: |
-          ${{ env.CMAJ_PATH }} --version || echo "Cmajor version check failed"
+          cmaj --version
+          echo "Cmajor CLI is working."
 
-      - name: Fix Main.cmajor (std::math::pow issue)
-        run: |
-          # Fix the pow function call if it exists
-          if grep -q "std::math::pow" Main.cmajor; then
-            sed -i 's/std::math::pow/pow/g' Main.cmajor
-            echo "Fixed std::math::pow to pow"
-          fi
-
+      # ------------------------------------------------------------------ #
+      # 8. Generate JUCE project from the Cmajor patch
+      # ------------------------------------------------------------------ #
       - name: Generate JUCE Project from Cmajor Patch
         run: |
-          ${{ env.CMAJ_PATH }} generate \
+          echo "=== Generating JUCE project ==="
+          cmaj generate \
             --target=juce \
-            --jucePath=${{ github.workspace }}/JUCE \
-            ${{ env.PATCH_FILE }} \
+            --jucePath="${{ github.workspace }}/JUCE" \
+            "${{ env.PATCH_FILE }}" \
             --output=GeneratedApp 2>&1 | tee cmaj-generate.log
-          
-          # Check if generation was successful
+
           if [ ! -d "GeneratedApp" ]; then
-            echo "ERROR: JUCE project generation failed!"
+            echo "ERROR: GeneratedApp directory was not created."
+            echo "=== cmaj-generate.log ==="
             cat cmaj-generate.log
             exit 1
           fi
 
-      - name: List Generated Files
-        run: |
-          echo "=== Generated App Structure ==="
-          find GeneratedApp/ -type f | head -30
-          echo "=== CMakeLists.txt ==="
-          cat GeneratedApp/CMakeLists.txt || echo "CMakeLists.txt not found"
+          echo "=== Generated files (first 40) ==="
+          find GeneratedApp -type f | sort | head -40
 
+      - name: Show Generated CMakeLists.txt
+        run: |
+          head -80 GeneratedApp/CMakeLists.txt || echo "CMakeLists.txt not found"
+
+      # ------------------------------------------------------------------ #
+      # 9. Android project structure
+      # ------------------------------------------------------------------ #
       - name: Create Android Studio Project Structure
         run: |
-          # Create Android project structure
-          mkdir -p AndroidProject/app/src/main/{cpp,java,res}
+          mkdir -p AndroidProject/app/src/main/cpp
           mkdir -p AndroidProject/app/src/main/java/com/subfigames/logicalchaos
-          
-          # Copy generated JUCE code
+          mkdir -p AndroidProject/app/src/main/res/values
+
+          # Copy generated JUCE/Cmajor C++ code
           cp -r GeneratedApp/* AndroidProject/app/src/main/cpp/
-          
-          echo "Android project structure created"
 
-      - name: Generate build.gradle files
+          echo "C++ source files:"
+          find AndroidProject/app/src/main/cpp -type f | head -20
+
+      # ------------------------------------------------------------------ #
+      # 10. Copy Gradle build files from templates stored in the repo
+      # ------------------------------------------------------------------ #
+      - name: Copy Gradle Build Files
         run: |
-          # Root build.gradle
-          cat > AndroidProject/build.gradle << 'EOFROOT'
-          buildscript {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:8.1.0'
-              }
-          }
-          
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          EOFROOT
+          TPLS="${{ github.workspace }}/.github/android-templates"
 
-          # App build.gradle
-          cat > AndroidProject/app/build.gradle << 'EOFAPP'
-          plugins {
-              id 'com.android.application'
-          }
-          
-          android {
-              namespace 'com.subfigames.logicalchaos.melodymachine'
-              compileSdk 33
-              ndkVersion "25.2.9519653"
-          
-              defaultConfig {
-                  applicationId "com.subfigames.logicalchaos.melodymachine"
-                  minSdk 24
-                  targetSdk 33
-                  versionCode 1
-                  versionName "4.0.0"
-          
-                  externalNativeBuild {
-                      cmake {
-                          cppFlags "-std=c++17 -frtti -fexceptions"
-                          arguments "-DANDROID_STL=c++_shared",
-                                    "-DANDROID_PLATFORM=android-24",
-                                    "-DJUCE_PATH=${projectDir}/src/main/cpp/../../../../../../JUCE"
-                      }
-                  }
-          
-                  ndk {
-                      abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64'
-                  }
-              }
-          
-              buildTypes {
-                  release {
-                      minifyEnabled false
-                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-                  }
-              }
-          
-              externalNativeBuild {
-                  cmake {
-                      path "src/main/cpp/CMakeLists.txt"
-                      version "3.22.1"
-                  }
-              }
-          
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-          }
-          
-          dependencies {
-              implementation 'androidx.appcompat:appcompat:1.6.1'
-          }
-          EOFAPP
+          cp "$TPLS/build.gradle"        AndroidProject/build.gradle
+          cp "$TPLS/app-build.gradle"    AndroidProject/app/build.gradle
+          cp "$TPLS/settings.gradle"     AndroidProject/settings.gradle
+          cp "$TPLS/gradle.properties"   AndroidProject/gradle.properties
+          cp "$TPLS/AndroidManifest.xml" AndroidProject/app/src/main/AndroidManifest.xml
+          cp "$TPLS/strings.xml"         AndroidProject/app/src/main/res/values/strings.xml
 
-          # settings.gradle
-          cat > AndroidProject/settings.gradle << 'EOFSETTINGS'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          rootProject.name = "LogicalChaosMelodyMachine"
-          include ':app'
-          EOFSETTINGS
+          touch AndroidProject/app/proguard-rules.pro
 
-          # gradle.properties
-          cat > AndroidProject/gradle.properties << 'EOFPROPS'
-          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-          android.useAndroidX=true
-          android.enableJetifier=true
-          EOFPROPS
+          echo "Gradle files copied:"
+          find AndroidProject -name "*.gradle" -o -name "gradle.properties" \
+               -o -name "AndroidManifest.xml" | sort
 
-          echo "Gradle files created"
-
-      - name: Install Gradle
+      # ------------------------------------------------------------------ #
+      # 11. Install Gradle & create wrapper
+      # ------------------------------------------------------------------ #
+      - name: Install Gradle 8.4
         run: |
-          wget https://services.gradle.org/distributions/gradle-8.2-bin.zip
-          unzip -q gradle-8.2-bin.zip
-          echo "${{ github.workspace }}/gradle-8.2/bin" >> $GITHUB_PATH
+          wget -q https://services.gradle.org/distributions/gradle-8.4-bin.zip -O gradle.zip
+          unzip -q gradle.zip
+          echo "${{ github.workspace }}/gradle-8.4/bin" >> "$GITHUB_PATH"
+          gradle-8.4/bin/gradle --version | head -1
 
       - name: Create Gradle Wrapper
         run: |
           cd AndroidProject
-          gradle wrapper --gradle-version 8.2
+          gradle wrapper --gradle-version 8.4
           chmod +x gradlew
 
+      # ------------------------------------------------------------------ #
+      # 12. Build APK
+      # ------------------------------------------------------------------ #
       - name: Build APK with Gradle
         run: |
           cd AndroidProject
-          ./gradlew assembleDebug --stacktrace --info 2>&1 | tee ../gradle-build.log || true
-          
-          # Check if build succeeded
+          ./gradlew assembleDebug \
+            --stacktrace \
+            --no-daemon \
+            2>&1 | tee ../gradle-build.log || GRADLE_FAILED=1
+
           if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
             echo "APK built successfully!"
             ls -lh app/build/outputs/apk/debug/
           else
-            echo "WARNING: APK not found. Build may have issues."
-            echo "Check logs for details."
+            echo "APK not found after build."
+            if [ -n "$GRADLE_FAILED" ]; then
+              exit 1
+            fi
           fi
 
-      - name: Find and List All APK Files
+      - name: Find APK files
+        if: always()
         run: |
-          echo "=== Searching for APK files ==="
-          find . -name "*.apk" -type f -ls || echo "No APK files found"
+          echo "=== All APK files ==="
+          find . -name "*.apk" -type f -ls 2>/dev/null || echo "No APK files found."
 
-      - name: Upload APK Artifact (if found)
+      # ------------------------------------------------------------------ #
+      # 13. Upload artifacts
+      # ------------------------------------------------------------------ #
+      - name: Upload APK Artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-Android-APK
-          path: |
-            AndroidProject/app/build/outputs/apk/**/*.apk
-            **/*.apk
+          name: ${{ env.APP_NAME }}-Android-Debug-APK
+          path: AndroidProject/app/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
 
       - name: Upload Build Logs
@@ -307,21 +244,28 @@ jobs:
             gradle-build.log
           if-no-files-found: ignore
 
-      - name: Create Build Summary
+      # ------------------------------------------------------------------ #
+      # 14. Build summary
+      # ------------------------------------------------------------------ #
+      - name: Write Build Summary
         if: always()
         run: |
-          echo "# Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**App Name:** ${{ env.APP_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Build Date:** $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ -f "AndroidProject/app/build/outputs/apk/debug/app-debug.apk" ]; then
-            APK_SIZE=$(du -h AndroidProject/app/build/outputs/apk/debug/app-debug.apk | cut -f1)
-            echo "✅ **Status:** APK Built Successfully" >> $GITHUB_STEP_SUMMARY
-            echo "📦 **APK Size:** $APK_SIZE" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ **Status:** Build completed but APK not found" >> $GITHUB_STEP_SUMMARY
-            echo "See build logs for details" >> $GITHUB_STEP_SUMMARY
-          fi
+          {
+            echo "# Build Summary"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| App | ${{ env.APP_NAME }} |"
+            echo "| Runner | ubuntu-22.04 |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Date | $(date -u) |"
+            echo ""
+            if [ -f "AndroidProject/app/build/outputs/apk/debug/app-debug.apk" ]; then
+              SZ=$(du -h "AndroidProject/app/build/outputs/apk/debug/app-debug.apk" | cut -f1)
+              echo "**Status:** Build Successful"
+              echo ""
+              echo "APK size: $SZ"
+            else
+              echo "**Status:** APK not found — check build-logs artifact"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
