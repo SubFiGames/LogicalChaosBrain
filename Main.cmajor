@@ -77,6 +77,8 @@ processor MainProcessor
         }
 
         float sampleRate = float (processor.frequency);
+        if (sampleRate < 1.0f)
+            sampleRate = 48000.0f;
         float pi = 3.14159265359f;
 
         loop
@@ -210,7 +212,16 @@ processor MainProcessor
                 modCutoff = 20.0f;
 
             float f  = modCutoff * 2.0f * pi / sampleRate;
+            if (f < 0.0f)
+                f = 0.0f;
+            if (f > 0.99f)
+                f = 0.99f;
+
             float q  = 1.0f - synthRes;
+            if (q < 0.01f)
+                q = 0.01f;
+            if (q > 0.99f)
+                q = 0.99f;
 
             float hp = oscOut - lp - (q * bp);
             bp = bp + (f * hp);
