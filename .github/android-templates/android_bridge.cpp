@@ -95,12 +95,16 @@ public:
             if (processor_ == nullptr)
                 return "createPluginFilter() returned nullptr";
 
-            constexpr int    defaultBlock = 256;
-            constexpr double defaultSR    = 48000.0;
-            processor_->setPlayConfigDetails (0, 2, defaultSR, defaultBlock);
-            processor_->prepareToPlay (defaultSR, defaultBlock);
+            // Log what the Cmajor-generated JUCE processor actually reports.
+            // Useful to know whether the channel layout we assume (stereo out)
+            // matches what Cmajor exposes.
+            const int busIns  = processor_->getTotalNumInputChannels();
+            const int busOuts = processor_->getTotalNumOutputChannels();
+            LOGI ("Processor reports: inputs=%d outputs=%d latency=%d params=%d",
+                  busIns, busOuts,
+                  processor_->getLatencySamples(),
+                  processor_->getParameters().size());
 
-            LOGI ("Engine::start — parameter count: %d", processor_->getParameters().size());
             for (auto* p : processor_->getParameters())
             {
                 juce::String id = p->getName (256);
@@ -109,13 +113,30 @@ public:
                 LOGI ("  param: %s", id.toRawUTF8());
             }
 
+            // Size our internal buffer to whatever the processor claims, with a
+            // floor of 2 (so we can always deliver stereo to Oboe).
+            numProcChannels_ = juce::jmax (2, juce::jmax (busIns, busOuts));
+
+            // ---- Prepare the processor with a GENEROUS maximum block size.
+            //
+            // Oboe's onAudioReady can deliver MORE frames than
+            // `framesPerBurst`, so prepareToPlay must be called with a safe
+            // upper bound — otherwise Cmajor's internal buffers are too small
+            // and processBlock writes past the end → SIGSEGV.  2048 is the
+            // effective cap; anything larger gets processed in chunks below.
+            constexpr int    kMaxBlock = 2048;
+            constexpr double kDefaultSR = 48000.0;
+
+            processor_->setPlayConfigDetails (busIns, busOuts, kDefaultSR, kMaxBlock);
+            processor_->prepareToPlay (kDefaultSR, kMaxBlock);
+
             oboe::AudioStreamBuilder b;
             b.setDirection (oboe::Direction::Output);
             b.setPerformanceMode (oboe::PerformanceMode::LowLatency);
             b.setSharingMode (oboe::SharingMode::Exclusive);
             b.setFormat (oboe::AudioFormat::Float);
             b.setChannelCount (2);
-            b.setSampleRate (static_cast<int32_t> (defaultSR));
+            b.setSampleRate (static_cast<int32_t> (kDefaultSR));
             b.setDataCallback (this);
             b.setErrorCallback (this);
 
@@ -128,16 +149,21 @@ public:
                 return err;
             }
 
-            // Re-prepare with the actual sample rate + burst that Oboe chose.
             const auto actualSR    = stream_->getSampleRate();
             const auto framesBurst = stream_->getFramesPerBurst();
             LOGI ("Oboe stream opened: SR=%d, framesPerBurst=%d", actualSR, framesBurst);
-            processor_->setPlayConfigDetails (0, 2, (double) actualSR, framesBurst);
-            processor_->prepareToPlay ((double) actualSR, framesBurst);
 
-            // Prealloc interleave scratch so the audio callback doesn't allocate.
-            scratchCh0_.resize (4096);
-            scratchCh1_.resize (4096);
+            // Re-prepare at the actual sample rate but KEEP the generous max.
+            processor_->setPlayConfigDetails (busIns, busOuts, (double) actualSR, kMaxBlock);
+            processor_->prepareToPlay ((double) actualSR, kMaxBlock);
+
+            // Pre-allocate per-channel scratch at the same max size.
+            scratch_.assign ((size_t) numProcChannels_,
+                             std::vector<float> ((size_t) kMaxBlock, 0.0f));
+            chanPtrs_.assign ((size_t) numProcChannels_, nullptr);
+            for (int i = 0; i < numProcChannels_; ++i)
+                chanPtrs_[(size_t) i] = scratch_[(size_t) i].data();
+            maxBlock_ = kMaxBlock;
 
             r = stream_->requestStart();
             if (r != oboe::Result::OK)
@@ -150,7 +176,7 @@ public:
                 return err;
             }
 
-            LOGI ("Engine started.");
+            LOGI ("Engine started. maxBlock=%d numProcChannels=%d", maxBlock_, numProcChannels_);
             return {};
         }
         catch (const std::exception& e)
@@ -224,31 +250,45 @@ public:
     {
         auto* out = static_cast<float*> (audioData);
 
-        if (processor_ == nullptr)
+        if (processor_ == nullptr || numProcChannels_ == 0)
         {
             std::memset (out, 0, sizeof (float) * 2 * (size_t) numFrames);
             return oboe::DataCallbackResult::Continue;
         }
 
-        // Grow scratch if Oboe asks for more frames than pre-allocated.
-        if ((int) scratchCh0_.size() < numFrames)
+        // Process in chunks of at most maxBlock_ frames — Cmajor's internal
+        // buffers were allocated for that size by prepareToPlay, and going
+        // larger would overrun them.
+        int processed = 0;
+        while (processed < numFrames)
         {
-            scratchCh0_.resize ((size_t) numFrames);
-            scratchCh1_.resize ((size_t) numFrames);
-        }
+            const int chunk = juce::jmin (numFrames - processed, maxBlock_);
 
-        float* channels[2] = { scratchCh0_.data(), scratchCh1_.data() };
-        juce::AudioBuffer<float> buf (channels, 2, numFrames);
-        buf.clear();
+            juce::AudioBuffer<float> buf (chanPtrs_.data(), numProcChannels_, chunk);
+            buf.clear();
 
-        juce::MidiBuffer midi;
-        processor_->processBlock (buf, midi);
+            juce::MidiBuffer midi;
+            try
+            {
+                processor_->processBlock (buf, midi);
+            }
+            catch (...)
+            {
+                // Belt-and-braces: any uncaught C++ exception inside Cmajor
+                // fills the buffer with silence rather than crashing the app.
+                // SIGSEGV won't hit this path — the signal handler covers it.
+                buf.clear();
+            }
 
-        // Interleave into Oboe's output (float stereo).
-        for (int i = 0; i < numFrames; ++i)
-        {
-            out[2 * i    ] = channels[0][i];
-            out[2 * i + 1] = channels[1][i];
+            // Interleave the first two channels into Oboe's stereo output.
+            const float* l = chanPtrs_[0];
+            const float* r = numProcChannels_ > 1 ? chanPtrs_[1] : chanPtrs_[0];
+            for (int i = 0; i < chunk; ++i)
+            {
+                out[2 * (processed + i)    ] = l[i];
+                out[2 * (processed + i) + 1] = r[i];
+            }
+            processed += chunk;
         }
         return oboe::DataCallbackResult::Continue;
     }
@@ -280,7 +320,14 @@ private:
     std::mutex                          mutex_;
     std::unique_ptr<juce::AudioProcessor> processor_;
     std::shared_ptr<oboe::AudioStream>    stream_;
-    std::vector<float>                    scratchCh0_, scratchCh1_;
+
+    // Pre-allocated per-channel scratch (avoid allocating on the audio thread).
+    // scratch_[ch] is a numFrames-sized buffer; chanPtrs_ is the array-of-pointers
+    // that JUCE's AudioBuffer<float>(float* const* ...) constructor needs.
+    std::vector<std::vector<float>>       scratch_;
+    std::vector<float*>                   chanPtrs_;
+    int                                   numProcChannels_ = 0;
+    int                                   maxBlock_        = 0;
 };
 
 static Engine g_engine;
