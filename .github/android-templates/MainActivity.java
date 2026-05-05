@@ -109,25 +109,11 @@ public class MainActivity extends Activity
             Log.w (TAG, "nativeSetCrashLogPath threw — continuing", t);
         }
 
-        try
-        {
-            startError = nativeStart();
-        }
-        catch (Throwable t)
-        {
-            startError = stackTraceString (t);
-        }
-
-        if (startError == null || startError.isEmpty())
-        {
-            engineStarted = true;
-            setContentView (buildWebViewLayout());
-        }
-        else
-        {
-            setContentView (buildScrollableStatusLayout (
-                "Audio engine failed to start", startError));
-        }
+        // Do not create the audio engine during Activity startup.
+        // Engine creation happens lazily from AndroidHost.startAudio(), which
+        // gives better diagnostics and avoids blocking or crashing the UI path.
+        engineStarted = true;
+        setContentView (buildWebViewLayout());
     }
 
     @Override
