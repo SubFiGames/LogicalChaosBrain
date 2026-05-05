@@ -244,12 +244,17 @@ public:
     {
         std::lock_guard<std::mutex> lock (mutex_);
 
-        if (processor_ == nullptr)
-            return "engine not initialised — call nativeStart first";
         if (stream_ != nullptr)
         {
             progress ("startAudio(): already running, no-op");
             return {}; // already running
+        }
+
+        if (processor_ == nullptr)
+        {
+            auto createErr = create();
+            if (! createErr.empty())
+                return createErr;
         }
 
         try
