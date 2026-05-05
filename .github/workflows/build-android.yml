@@ -78,7 +78,8 @@ jobs:
             cmake ninja-build pkg-config \
             libwebkit2gtk-4.0-dev libgtk-3-dev \
             libasound2-dev libpulse-dev \
-            libfreetype6 libcurl4
+            libfreetype6 libcurl4 \
+            xvfb
 
       # ------------------------------------------------------------------ #
       # 6. JUCE Framework — pinned to stable release
@@ -125,11 +126,37 @@ jobs:
       - name: Generate JUCE Project from Cmajor Patch
         run: |
           echo "=== Generating JUCE project ==="
-          cmaj generate \
-            --target=juce \
-            --jucePath="${{ github.workspace }}/JUCE" \
-            "${{ env.PATCH_FILE }}" \
-            --output=GeneratedApp 2>&1 | tee cmaj-generate.log
+
+          # ------------------------------------------------------------------
+          # Cmajor's CLI pulls in JUCE/CHOC which can briefly spin up a GTK
+          # main loop (for WebView probing).  On GitHub's headless runner this
+          # causes the GTK-CRITICAL 'main_loops != NULL' warning AND can hang
+          # the CLI indefinitely if the assertion happens before the main
+          # loop starts.  Mitigations:
+          #   1. xvfb-run: provides a virtual X display so any GUI init
+          #      succeeds and returns cleanly.
+          #   2. GDK_BACKEND=offscreen: belt-and-braces — any GDK code paths
+          #      that still run avoid needing a real display.
+          #   3. timeout 180: hard-fail after 3 minutes rather than hanging
+          #      for the full 6-hour job timeout.
+          # ------------------------------------------------------------------
+          set +e
+          GDK_BACKEND=offscreen \
+          timeout --kill-after=10 180 \
+            xvfb-run -a --server-args='-screen 0 1024x768x24' \
+              cmaj generate \
+                --target=juce \
+                --jucePath="${{ github.workspace }}/JUCE" \
+                "${{ env.PATCH_FILE }}" \
+                --output=GeneratedApp 2>&1 | tee cmaj-generate.log
+          GEN_RC=${PIPESTATUS[0]}
+          set -e
+          echo "cmaj generate exit code: ${GEN_RC}"
+          if [ "${GEN_RC}" = "124" ]; then
+            echo "ERROR: cmaj generate HUNG — killed by timeout after 180s."
+            echo "This usually means Cmajor CLI is stuck initialising a GUI."
+            exit 1
+          fi
 
           if [ ! -d "GeneratedApp" ]; then
             echo "ERROR: GeneratedApp directory was not created."
