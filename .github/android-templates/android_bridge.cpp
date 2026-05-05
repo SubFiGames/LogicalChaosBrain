@@ -20,7 +20,10 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <pthread.h>
 #include <string>
+#include <unistd.h>
+#include <sys/types.h>
 #include <vector>
 
 #include <oboe/Oboe.h>
@@ -52,12 +55,20 @@ namespace
 
     void signalHandler (int sig)
     {
-        char buf[128];
+        char buf[256];
+        // gettid() is the Linux-specific thread id; pthread_self() is more
+        // useful for matching with our LOGI calls.  Print BOTH so the user
+        // can tell which thread crashed (audio vs message vs JS bridge).
         std::snprintf (buf, sizeof (buf),
-                       "Native signal %d (%s) caught in audio thread.\n"
-                       "The shared library crashed — see logcat tag '%s' "
-                       "for the tombstone.",
-                       sig, strsignal (sig), LOG_TAG);
+                       "Native signal %d (%s)\n"
+                       "tid=%d  pthread=%lx\n"
+                       "See logcat tag '%s' for the tombstone and the\n"
+                       "last LOGI line printed before the crash — that will\n"
+                       "narrow down which thread/operation segfaulted.",
+                       sig, strsignal (sig),
+                       (int) gettid(),
+                       (unsigned long) pthread_self(),
+                       LOG_TAG);
         writeCrashLog ("Native crash", buf);
         // Re-raise with default disposition so Android can still produce a tombstone.
         std::signal (sig, SIG_DFL);

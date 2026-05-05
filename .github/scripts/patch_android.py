@@ -66,7 +66,12 @@ MESSAGELOOP_STUB = r"""
        inline void postMessage (std::function<void()> /*f*/) { /* dropped */ }
 
        // --- Called by cmaj_Patch.h to check thread affinity -------------
-       inline bool callerIsOnMessageThread() { return true; }
+       // Return false on Android: there is no message thread, so Cmajor
+       // should ALWAYS treat itself as off-thread and route work via
+       // postMessage (which we then drop).  Returning true here would let
+       // Cmajor skip the async hop and run message-thread code inline on
+       // the audio thread → SIGSEGV.
+       inline bool callerIsOnMessageThread() { return false; }
 
        // --- Other helpers -----------------------------------------------
        inline void run()  {}
@@ -184,21 +189,27 @@ WEBVIEW_STUB = r"""
        WebView& operator= (const WebView&) = delete;
 
        // ---- Methods accessed by Cmajor helpers -------------------------
+       // IMPORTANT: every method that returns bool must return TRUE on the
+       // happy path even though it's a stub.  Cmajor's Patch class checks
+       // these return values; if they say "failure", it leaves its DSP
+       // initialisation half-done and the next processBlock dereferences
+       // a null pointer → SIGSEGV.  We're reporting "everything worked"
+       // so Cmajor proceeds with its full init sequence.
        void* getViewHandle() const { return nullptr; }
-       bool  navigate        (const std::string&) { return false; }
-       bool  setHTML         (const std::string&) { return false; }
+       bool  navigate        (const std::string&) { return true;  }
+       bool  setHTML         (const std::string&) { return true;  }
        bool  isReady         ()             const { return true;  }
-       bool  addInitScript   (const std::string&) { return false; }
+       bool  addInitScript   (const std::string&) { return true;  }
 
        // evaluateJavascript — Cmajor calls this with various callback
        // signatures (1-arg `void(const std::string*)` AND 2-arg
        // `void(const std::string& error, const choc::value::ValueView&)`).
        // Use overloads + a template to accept ANY callable so we don't
        // care about the exact signature.
-       bool evaluateJavascript (const std::string&) { return false; }
+       bool evaluateJavascript (const std::string&) { return true; }
 
        template<typename Callback>
-       bool evaluateJavascript (const std::string&, Callback&&) { return false; }
+       bool evaluateJavascript (const std::string&, Callback&&) { return true; }
 
        // bind() — used by cmaj_PatchWebView.h to expose JS<->C++ bridge.
        // Template so it accepts any callback signature without pulling in
