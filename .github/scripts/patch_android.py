@@ -2,29 +2,23 @@
 """
 patch_android.py  <search_root>
 
-Patches the two CHOC library headers that hard-error on Android:
-  - choc/gui/choc_MessageLoop.h
-  - choc/gui/choc_WebView.h
+Patches the CHOC + Cmajor headers that fail on Android because they reference
+desktop-only or newer-JUCE-only APIs:
 
-Strategy: wrap the entire original file content in
-  #else  // not __ANDROID__
-and inject complete Android stubs ABOVE it that satisfy every member
-used by cmaj_Patch.h, cmaj_PatchHelpers.h, cmaj_PatchWebView.h and
-cmaj_PatchWorker_WebView.h.
+  - choc/gui/choc_MessageLoop.h        (no Android backend)
+  - choc/gui/choc_WebView.h            (no Android backend)
+  - cmajor/helpers/cmaj_JUCEPlugin.h   (uses juce::JSON::FormatOptions which
+                                        is missing in older JUCE shipped with
+                                        Cmajor's Android export)
 
-Confirmed-needed additions vs. previous attempt
-  choc::messageloop  : postMessage(fn), callerIsOnMessageThread()
-  choc::ui::WebView  : bind(name,cb)  [template]
-  choc::ui::WebView::Options : Resource struct,
-                                transparentBackground,
-                                acceptsFirstMouseClick,
-                                webviewIsReady callback,
-                                fetchResource callback
-  Constructor        : split into WebView() + WebView(Options) to avoid the
-                       Clang "default member initializer outside of member
-                       functions" error that fires when Options={} is used
-                       as a default argument while Options is defined inside
-                       the same enclosing class.
+CHOC strategy: keep the original file but wrap it in `#else // not __ANDROID__`
+and inject a complete Android stub above it that satisfies every member used
+by cmaj_Patch.h, cmaj_PatchHelpers.h, cmaj_PatchWebView.h,
+cmaj_PatchWorker_WebView.h and cmaj_JUCEPlugin.h.
+
+Cmajor JUCE plugin strategy: in-place text substitution to swap the
+`juce::JSON::FormatOptions().withSpacing(juce::JSON::Spacing::none)` call for
+the legacy `true` boolean overload of `juce::JSON::toString()`.
 """
 
 import os
@@ -40,8 +34,8 @@ MESSAGELOOP_STUB = r"""
 // ANDROID COMPATIBILITY STUB  (injected by patch_android.py)
 // choc::messageloop does not support Android natively in this Cmajor
 // release.  The stubs below satisfy every symbol used by
-// cmaj_Patch.h / cmaj_PatchHelpers.h so the plugin compiles.
-// Audio DSP is unaffected; UI callbacks are silent no-ops.
+// cmaj_Patch.h / cmaj_PatchHelpers.h / cmaj_JUCEPlugin.h so the plugin
+// compiles.  Audio DSP is unaffected; UI callbacks are silent no-ops.
 //=======================================================================
 #if defined(__ANDROID__)
 #  ifndef CHOC_ANDROID
@@ -56,9 +50,13 @@ MESSAGELOOP_STUB = r"""
 #  include <functional>
 #  include <memory>
    namespace choc { namespace messageloop {
-       // --- Called by cmaj_Patch.h many times to queue callbacks --------
-       // On Android there is no CHOC message loop; run the callback
-       // synchronously so nothing silently disappears.
+       // --- Lifecycle (called from cmaj_JUCEPlugin.h) -------------------
+       inline void initialise() {}
+       inline void shutdown()   {}
+
+       // --- Called by cmaj_Patch.h to queue callbacks -------------------
+       // No CHOC message loop on Android: run callback synchronously so
+       // nothing silently disappears.
        inline void postMessage (std::function<void()> f) { if (f) f(); }
 
        // --- Called by cmaj_Patch.h to check thread affinity -------------
@@ -88,15 +86,16 @@ MESSAGELOOP_STUB_CLOSE = """
 
 
 # ---------------------------------------------------------------------------
-# Android stub for choc::ui::WebView
+# Android stub for choc::ui::WebView (and createJUCEWebViewHolder helper)
 # ---------------------------------------------------------------------------
 WEBVIEW_STUB = r"""
 //=======================================================================
 // ANDROID COMPATIBILITY STUB  (injected by patch_android.py)
 // choc::ui::WebView does not support Android in this Cmajor release.
 // The stub satisfies every member accessed by cmaj_PatchWebView.h,
-// cmaj_PatchWorker_WebView.h, and related Cmajor helpers.
-// The plugin UI is unavailable on Android; the audio engine is fine.
+// cmaj_PatchWorker_WebView.h, cmaj_JUCEPlugin.h, and related Cmajor
+// helpers.  The plugin UI is unavailable on Android; the audio engine
+// is fine.
 //=======================================================================
 #if defined(__ANDROID__)
 #  ifndef CHOC_ANDROID
@@ -112,6 +111,13 @@ WEBVIEW_STUB = r"""
 #  include <vector>
 #  include <memory>
 #  include <optional>
+#  include <utility>
+
+   // forward-declare juce::Component so createJUCEWebViewHolder() can
+   // return a std::unique_ptr<juce::Component> without dragging the full
+   // juce_gui_basics header into choc.
+   namespace juce { class Component; }
+
    namespace choc { namespace ui {
 
    struct WebView
@@ -178,8 +184,15 @@ WEBVIEW_STUB = r"""
        bool  isReady         ()             const { return true;  }
        bool  addInitScript   (const std::string&) { return false; }
 
-       bool  evaluateJavascript (const std::string&,
-                 std::function<void(const std::string*)> = {}) { return false; }
+       // evaluateJavascript — Cmajor calls this with various callback
+       // signatures (1-arg `void(const std::string*)` AND 2-arg
+       // `void(const std::string& error, const choc::value::ValueView&)`).
+       // Use overloads + a template to accept ANY callable so we don't
+       // care about the exact signature.
+       bool evaluateJavascript (const std::string&) { return false; }
+
+       template<typename Callback>
+       bool evaluateJavascript (const std::string&, Callback&&) { return false; }
 
        // bind() — used by cmaj_PatchWebView.h to expose JS<->C++ bridge.
        // Template so it accepts any callback signature without pulling in
@@ -192,6 +205,14 @@ WEBVIEW_STUB = r"""
                  std::function<std::string(const std::vector<std::string>&)>) {}
    };
 
+   // Helper used by cmaj_JUCEPlugin.h to wrap a CHOC WebView in a
+   // juce::Component.  On Android we have no WebView, so return an empty
+   // unique_ptr — the JUCE plugin will simply have no UI.  Construction
+   // of an empty std::unique_ptr<juce::Component> only requires a forward
+   // declaration of juce::Component, which is provided above.
+   inline std::unique_ptr<juce::Component>
+   createJUCEWebViewHolder (WebView&) { return {}; }
+
    }} // namespace choc::ui
 #  endif // CHOC_WEBVIEW_ANDROID_STUBBED
 
@@ -202,6 +223,45 @@ WEBVIEW_STUB = r"""
 WEBVIEW_STUB_CLOSE = """
 #endif // __ANDROID__ / not __ANDROID__
 """
+
+
+# ---------------------------------------------------------------------------
+# In-place patches for cmaj_JUCEPlugin.h
+# ---------------------------------------------------------------------------
+# The shipped Cmajor helper uses juce::JSON::FormatOptions (added in JUCE
+# 7.0.10+).  The Android JUCE bundled with the Cmajor export here is older
+# and only exposes the legacy `juce::JSON::toString (v, bool oneLine)`
+# overload, so substitute the call accordingly.
+JUCEPLUGIN_REPLACEMENTS = [
+    (
+        "juce::JSON::toString (v, juce::JSON::FormatOptions().withSpacing (juce::JSON::Spacing::none))",
+        "juce::JSON::toString (v, true)",
+    ),
+    # Defensive variants in case Cmajor reformats the line in future versions
+    (
+        "juce::JSON::FormatOptions().withSpacing (juce::JSON::Spacing::none)",
+        "true /* compact */",
+    ),
+]
+
+
+def patch_juce_plugin (filepath):
+    with open (filepath, "r", encoding="utf-8", errors="replace") as f:
+        original = f.read()
+
+    patched = original
+    changed = False
+    for needle, replacement in JUCEPLUGIN_REPLACEMENTS:
+        if needle in patched:
+            patched = patched.replace (needle, replacement)
+            changed = True
+
+    if changed:
+        with open (filepath, "w", encoding="utf-8") as f:
+            f.write (patched)
+        print (f"  Patched JUCE-JSON line in: {filepath}")
+    else:
+        print (f"  No JUCE-JSON match in: {filepath} (already patched or signature drift)")
 
 
 # ---------------------------------------------------------------------------
@@ -252,8 +312,13 @@ def main():
         patch_header (fname, WEBVIEW_STUB, WEBVIEW_STUB_CLOSE)
         patched += 1
 
+    # Cmajor JUCE plugin helper – swap unsupported juce::JSON::FormatOptions
+    for fname in find_files ("cmaj_JUCEPlugin.h", search_root):
+        patch_juce_plugin (fname)
+        patched += 1
+
     if patched == 0:
-        print ("WARNING: no CHOC headers found to patch — check search_root path.")
+        print ("WARNING: no headers found to patch — check search_root path.")
     else:
         print (f"Done — {patched} file(s) patched for Android.")
 

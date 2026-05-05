@@ -70,6 +70,16 @@ view.js                    ← plugin UI (JS, exported as createPatchView)
 - **Bug:** `ref: master` unpredictably pulled breaking changes
 - **Fix:** `ref: "7.0.9"` — known-good stable release
 
+### Fix 9 — Android NDK CMake: Cmajor's CHOC headers + cmaj_JUCEPlugin.h fail on Android (Feb 2026)
+- **Bug A:** `choc::messageloop` and `choc::ui::WebView` have no Android backend; NDK build fails with missing `postMessage`, `initialise`, `bind`, `Options` members, and incompatible `evaluateJavascript` callback signature.
+- **Bug B:** `cmaj_JUCEPlugin.h` calls `juce::JSON::toString(v, juce::JSON::FormatOptions().withSpacing(juce::JSON::Spacing::none))` — `FormatOptions` / `Spacing` were added in JUCE 7.0.10+, missing from the JUCE version Cmajor's Android export uses.
+- **Bug C:** `cmaj_JUCEPlugin.h` calls `choc::ui::createJUCEWebViewHolder(...)` — only defined in CHOC's desktop window helper, missing on Android.
+- **Fix:** `/app/.github/scripts/patch_android.py` now:
+  - Wraps `choc_MessageLoop.h` original content in `#else // not __ANDROID__` and injects an Android stub providing `initialise()`, `shutdown()`, `postMessage()`, `callerIsOnMessageThread()`, `Timer`, `run/stop/isRunning`.
+  - Wraps `choc_WebView.h` similarly with a full `WebView` stub (Options + Resource + transparentBackground + acceptsFirstMouseClick + webviewIsReady + fetchResource), `bind()` template, **two `evaluateJavascript` overloads** (no-callback + templated callback) so any callback signature compiles, and a `createJUCEWebViewHolder()` returning an empty `std::unique_ptr<juce::Component>` (forward-declared).
+  - In-place patches `cmaj_JUCEPlugin.h` to swap the unsupported `juce::JSON::FormatOptions(...)` call for the legacy `juce::JSON::toString(v, true)` boolean overload.
+- Verified locally with a synthetic test directory; awaiting CI re-run for end-to-end validation.
+
 ---
 
 ## Files Changed
