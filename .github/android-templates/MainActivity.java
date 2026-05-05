@@ -65,8 +65,10 @@ public class MainActivity extends Activity
 
     // --- Native methods (android_bridge.cpp) --------------------------------
     private native void   nativeSetCrashLogPath (String path);
-    private native String nativeStart();                         // "" on success, error otherwise
-    private native void   nativeStop();
+    private native String nativeStart();                         // create engine
+    private native String nativeStartAudio();                    // open Oboe + start
+    private native void   nativeStopAudio();
+    private native void   nativeStop();                          // destroy engine
     private native void   nativeSendEvent       (String endpointID, double value);
     private native void   nativeSendParameter   (String endpointID, float  value);
 
@@ -344,6 +346,22 @@ public class MainActivity extends Activity
         public String getNativeStatus()
         {
             return "lib=" + loadedLib + "; started=" + engineStarted;
+        }
+
+        // Called by the WebView UI to start/stop audio.  Returns "" on success
+        // or an error string the JS can display.
+        @JavascriptInterface
+        public String startAudio()
+        {
+            try { return nativeStartAudio(); }
+            catch (Throwable t) { return stackTraceString (t); }
+        }
+
+        @JavascriptInterface
+        public void stopAudio()
+        {
+            try { nativeStopAudio(); }
+            catch (Throwable t) { Log.e (TAG, "stopAudio failed", t); }
         }
     }
 }

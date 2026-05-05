@@ -81,23 +81,29 @@ class Engine : public oboe::AudioStreamDataCallback,
                public oboe::AudioStreamErrorCallback
 {
 public:
-    std::string start()
+    // Step 1: create the JUCE processor and prepareToPlay.  Does NOT open
+    // any audio stream — the WebView UI loads after this, and the user
+    // explicitly starts audio with startAudio() (so if audio crashes, the
+    // UI is still visible as evidence the engine itself initialised cleanly).
+    std::string create()
     {
         std::lock_guard<std::mutex> lock (mutex_);
 
-        if (stream_ != nullptr)
-            return {}; // already running
+        if (processor_ != nullptr)
+            return {};
 
         try
         {
-            LOGI ("Engine::start — creating JUCE processor");
+            // Force JUCE's MessageManager to exist before any code path that
+            // might touch it.  Cmajor's processor occasionally pokes JUCE
+            // internals that assume MessageManager::getInstance() is non-null.
+            (void) juce::MessageManager::getInstance();
+
+            LOGI ("Engine::create — calling createPluginFilter()");
             processor_.reset (createPluginFilter());
             if (processor_ == nullptr)
                 return "createPluginFilter() returned nullptr";
 
-            // Log what the Cmajor-generated JUCE processor actually reports.
-            // Useful to know whether the channel layout we assume (stereo out)
-            // matches what Cmajor exposes.
             const int busIns  = processor_->getTotalNumInputChannels();
             const int busOuts = processor_->getTotalNumOutputChannels();
             LOGI ("Processor reports: inputs=%d outputs=%d latency=%d params=%d",
@@ -113,22 +119,50 @@ public:
                 LOGI ("  param: %s", id.toRawUTF8());
             }
 
-            // Size our internal buffer to whatever the processor claims, with a
-            // floor of 2 (so we can always deliver stereo to Oboe).
             numProcChannels_ = juce::jmax (2, juce::jmax (busIns, busOuts));
 
-            // ---- Prepare the processor with a GENEROUS maximum block size.
-            //
-            // Oboe's onAudioReady can deliver MORE frames than
-            // `framesPerBurst`, so prepareToPlay must be called with a safe
-            // upper bound — otherwise Cmajor's internal buffers are too small
-            // and processBlock writes past the end → SIGSEGV.  2048 is the
-            // effective cap; anything larger gets processed in chunks below.
-            constexpr int    kMaxBlock = 2048;
+            constexpr int    kMaxBlock  = 2048;
             constexpr double kDefaultSR = 48000.0;
-
             processor_->setPlayConfigDetails (busIns, busOuts, kDefaultSR, kMaxBlock);
             processor_->prepareToPlay (kDefaultSR, kMaxBlock);
+            maxBlock_ = kMaxBlock;
+
+            scratch_.assign ((size_t) numProcChannels_,
+                             std::vector<float> ((size_t) kMaxBlock, 0.0f));
+            chanPtrs_.assign ((size_t) numProcChannels_, nullptr);
+            for (int i = 0; i < numProcChannels_; ++i)
+                chanPtrs_[(size_t) i] = scratch_[(size_t) i].data();
+
+            LOGI ("Engine ready: maxBlock=%d numProcChannels=%d", maxBlock_, numProcChannels_);
+            return {};
+        }
+        catch (const std::exception& e)
+        {
+            processor_.reset();
+            return std::string ("Engine create threw: ") + e.what();
+        }
+        catch (...)
+        {
+            processor_.reset();
+            return "Engine create threw unknown exception";
+        }
+    }
+
+    // Step 2: open the Oboe stream and start the audio thread.  Called from
+    // JS via AndroidHost.startAudio() once the user is ready.
+    std::string startAudio()
+    {
+        std::lock_guard<std::mutex> lock (mutex_);
+
+        if (processor_ == nullptr)
+            return "engine not initialised — call nativeStart first";
+        if (stream_ != nullptr)
+            return {}; // already running
+
+        try
+        {
+            const auto sr = processor_->getSampleRate() > 0
+                          ? processor_->getSampleRate() : 48000.0;
 
             oboe::AudioStreamBuilder b;
             b.setDirection (oboe::Direction::Output);
@@ -136,7 +170,7 @@ public:
             b.setSharingMode (oboe::SharingMode::Exclusive);
             b.setFormat (oboe::AudioFormat::Float);
             b.setChannelCount (2);
-            b.setSampleRate (static_cast<int32_t> (kDefaultSR));
+            b.setSampleRate (static_cast<int32_t> (sr));
             b.setDataCallback (this);
             b.setErrorCallback (this);
 
@@ -145,7 +179,6 @@ public:
             {
                 std::string err = std::string ("Oboe openStream failed: ") + oboe::convertToText (r);
                 LOGE ("%s", err.c_str());
-                processor_.reset();
                 return err;
             }
 
@@ -153,17 +186,12 @@ public:
             const auto framesBurst = stream_->getFramesPerBurst();
             LOGI ("Oboe stream opened: SR=%d, framesPerBurst=%d", actualSR, framesBurst);
 
-            // Re-prepare at the actual sample rate but KEEP the generous max.
-            processor_->setPlayConfigDetails (busIns, busOuts, (double) actualSR, kMaxBlock);
-            processor_->prepareToPlay ((double) actualSR, kMaxBlock);
-
-            // Pre-allocate per-channel scratch at the same max size.
-            scratch_.assign ((size_t) numProcChannels_,
-                             std::vector<float> ((size_t) kMaxBlock, 0.0f));
-            chanPtrs_.assign ((size_t) numProcChannels_, nullptr);
-            for (int i = 0; i < numProcChannels_; ++i)
-                chanPtrs_[(size_t) i] = scratch_[(size_t) i].data();
-            maxBlock_ = kMaxBlock;
+            // Re-prepare with the actual sample rate (still keep maxBlock).
+            processor_->setPlayConfigDetails (
+                processor_->getTotalNumInputChannels(),
+                processor_->getTotalNumOutputChannels(),
+                (double) actualSR, maxBlock_);
+            processor_->prepareToPlay ((double) actualSR, maxBlock_);
 
             r = stream_->requestStart();
             if (r != oboe::Result::OK)
@@ -172,28 +200,37 @@ public:
                 LOGE ("%s", err.c_str());
                 stream_->close();
                 stream_.reset();
-                processor_.reset();
                 return err;
             }
 
-            LOGI ("Engine started. maxBlock=%d numProcChannels=%d", maxBlock_, numProcChannels_);
+            LOGI ("Audio stream started.");
             return {};
         }
         catch (const std::exception& e)
         {
-            processor_.reset();
             if (stream_) { stream_->close(); stream_.reset(); }
-            return std::string ("Engine start threw: ") + e.what();
+            return std::string ("startAudio threw: ") + e.what();
         }
         catch (...)
         {
-            processor_.reset();
             if (stream_) { stream_->close(); stream_.reset(); }
-            return "Engine start threw unknown exception";
+            return "startAudio threw unknown exception";
         }
     }
 
-    void stop()
+    void stopAudio()
+    {
+        std::lock_guard<std::mutex> lock (mutex_);
+        if (stream_)
+        {
+            stream_->requestStop();
+            stream_->close();
+            stream_.reset();
+            LOGI ("Audio stream stopped.");
+        }
+    }
+
+    void destroy()
     {
         std::lock_guard<std::mutex> lock (mutex_);
         if (stream_)
@@ -207,7 +244,7 @@ public:
             processor_->releaseResources();
             processor_.reset();
         }
-        LOGI ("Engine stopped.");
+        LOGI ("Engine destroyed.");
     }
 
     void sendParameter (const std::string& id, float value)
@@ -364,25 +401,44 @@ Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativeStart
 {
     try
     {
-        auto err = g_engine.start();
-        return env->NewStringUTF (err.c_str()); // "" on success
+        auto err = g_engine.create();
+        return env->NewStringUTF (err.c_str());
     }
     catch (const std::exception& e)
     {
-        writeCrashLog ("Engine start threw std::exception", e.what());
+        writeCrashLog ("Engine create threw std::exception", e.what());
         return env->NewStringUTF (e.what());
     }
     catch (...)
     {
-        writeCrashLog ("Engine start threw unknown exception", "");
+        writeCrashLog ("Engine create threw unknown exception", "");
         return env->NewStringUTF ("unknown exception");
     }
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativeStartAudio
+    (JNIEnv* env, jobject)
+{
+    try
+    {
+        auto err = g_engine.startAudio();
+        return env->NewStringUTF (err.c_str());
+    }
+    catch (const std::exception& e) { return env->NewStringUTF (e.what()); }
+    catch (...)                     { return env->NewStringUTF ("unknown"); }
+}
+
+JNIEXPORT void JNICALL
+Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativeStopAudio (JNIEnv*, jobject)
+{
+    g_engine.stopAudio();
 }
 
 JNIEXPORT void JNICALL
 Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativeStop (JNIEnv*, jobject)
 {
-    g_engine.stop();
+    g_engine.destroy();
 }
 
 JNIEXPORT void JNICALL

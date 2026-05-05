@@ -55,9 +55,15 @@ MESSAGELOOP_STUB = r"""
        inline void shutdown()   {}
 
        // --- Called by cmaj_Patch.h to queue callbacks -------------------
-       // No CHOC message loop on Android: run callback synchronously so
-       // nothing silently disappears.
-       inline void postMessage (std::function<void()> f) { if (f) f(); }
+       // CRITICAL: Cmajor calls postMessage from the audio thread to defer
+       // work to the message thread.  Running the callback synchronously
+       // (which is what our previous stub did) executes message-thread-only
+       // JUCE code on the audio thread → SIGSEGV on first audio block.
+       // On Android we have no message loop, so the only safe behaviour is
+       // to DROP the callback.  Audio DSP keeps running; only async UI/state
+       // updates that round-trip through the message thread are lost — and
+       // since we have no native CHOC UI on Android, that's a no-op anyway.
+       inline void postMessage (std::function<void()> /*f*/) { /* dropped */ }
 
        // --- Called by cmaj_Patch.h to check thread affinity -------------
        inline bool callerIsOnMessageThread() { return true; }
