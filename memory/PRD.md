@@ -62,9 +62,15 @@
    - Forced Android linker to lld: `-DANDROID_LD=lld`.
    - Disabled IPO/LTO at CMake config + target levels to avoid `ld.gold`/`LLVMgold.so` release-link failures.
 
+9. **Guaranteed app artifact policy (debug-first CI)**
+   - File: `.github/workflows/build-android.yml`
+   - Build flow now runs `assembleDebug` first (required), then `assembleRelease` as best-effort.
+   - Workflow no longer fails if release linker breaks; debug APK remains the guaranteed deliverable.
+   - Added generated `CMakeLists.txt` sanitization step to replace `-fuse-ld=gold`, remove `-flto=thin`, and disable IPO strings.
+
 ## Validation Performed
 - Testing agent runs completed with passing checks.
-- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`, `/app/test_reports/iteration_4.json`, `/app/test_reports/iteration_5.json`
+- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`, `/app/test_reports/iteration_4.json`, `/app/test_reports/iteration_5.json`, `/app/test_reports/iteration_6.json`
 - Added test coverage artifact: `/app/backend/tests/test_android_ci_templates.py`
 - Validated:
   - bridge structure no longer broken,
@@ -75,6 +81,7 @@
   - index.html + workflow-style inlined output script blocks parse successfully.
   - mount trigger now runs after inline `createPatchView` definition.
   - release template now enforces lld + IPO/LTO-off safeguards.
+  - workflow guarantees debug artifact output even when release native linker fails.
 
 ## Prioritized Backlog
 - **P0**
