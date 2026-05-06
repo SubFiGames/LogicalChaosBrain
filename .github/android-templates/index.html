@@ -10,37 +10,79 @@
                  -webkit-user-select: none; user-select: none; overflow: auto; }
     #engine-bar { position: sticky; top: 0; z-index: 10;
                   background: #15151d; border-bottom: 1px solid #2a2a3a;
-                  padding: 10px 16px; display: flex; align-items: center; gap: 12px; }
+                  padding: 10px 16px; display: flex; align-items: center; gap: 12px;
+                  flex-wrap: wrap; }
     #engine-bar button { background: #2a2a3a; color: #e0e0ff; border: 1px solid #3a3a55;
                          padding: 8px 16px; border-radius: 4px; font-size: 14px; cursor: pointer; }
     #engine-bar button:hover { background: #3a3a55; }
-    #engine-bar #engine-status { font-size: 12px; color: #9999b3; }
+    #engine-bar #engine-status { font-size: 12px; color: #9999b3; flex:1; min-width: 200px; }
     #root { width:100%; }
+
+    /* Diagnostic panel — only visible when there's something to report. */
+    #diagnostic { display: none; padding: 12px 16px; background: #1a0a0a;
+                  border-bottom: 1px solid #5a1a1a; color: #ff9a9a;
+                  font-family: monospace; font-size: 11px; white-space: pre-wrap;
+                  max-height: 200px; overflow: auto; }
+    #diagnostic.show { display: block; }
   </style>
 </head>
 <body>
 <div id="engine-bar">
   <button id="audio-toggle" data-testid="audio-toggle-btn">Start Audio</button>
-  <span id="engine-status">Engine ready — audio not started.</span>
+  <button id="diag-toggle"  data-testid="diag-toggle-btn">Diagnostics</button>
+  <span   id="engine-status">UI ready &mdash; tap "Start Audio" to load the engine.</span>
 </div>
+<div id="diagnostic" data-testid="diagnostic-panel"></div>
 <div id="root"></div>
 
 <script>
 /* --- Audio engine button -------------------------------------------------- */
 (function () {
-  const btn  = document.getElementById ('audio-toggle');
-  const stat = document.getElementById ('engine-status');
+  const btn   = document.getElementById ('audio-toggle');
+  const stat  = document.getElementById ('engine-status');
+  const diag  = document.getElementById ('diagnostic');
+  const dbtn  = document.getElementById ('diag-toggle');
   let running = false;
+
+  const showDiag = (text) => {
+    diag.textContent = text || '(empty)';
+    diag.classList.add ('show');
+  };
+
+  dbtn.addEventListener ('click', () => {
+    if (diag.classList.contains ('show')) {
+      diag.classList.remove ('show');
+      return;
+    }
+    const host = window.AndroidHost;
+    let txt = 'AndroidHost bridge: ' + (host ? 'present' : 'MISSING') + '\n';
+    if (host && host.getNativeStatus) {
+      try { txt += 'status: ' + host.getNativeStatus() + '\n\n'; }
+      catch (e) { txt += 'status threw: ' + e + '\n\n'; }
+    }
+    if (host && host.readProgressLog) {
+      try { txt += 'progress.log:\n' + host.readProgressLog(); }
+      catch (e) { txt += 'readProgressLog threw: ' + e; }
+    }
+    showDiag (txt);
+  });
 
   btn.addEventListener ('click', () => {
     const host = window.AndroidHost;
     if (!host) { stat.textContent = 'AndroidHost bridge missing.'; return; }
     try {
       if (!running) {
-        const err = host.startAudio ? host.startAudio() : '';
+        // Prefer the new startEngine(); fall back to startAudio() for older bridges.
+        const startFn = host.startEngine || host.startAudio;
+        const err = startFn ? startFn.call (host) : '';
         if (err && err.length > 0) {
-          stat.textContent = 'startAudio error: ' + err;
+          stat.textContent = 'Start failed: ' + err.split ('\n')[0];
           stat.style.color = '#ff8080';
+          // Also auto-show the progress log to help diagnose.
+          if (host.readProgressLog) {
+            try { showDiag ('Start failed: ' + err + '\n\nprogress.log:\n' + host.readProgressLog()); }
+            catch (_) {}
+          }
         } else {
           running = true;
           btn.textContent = 'Stop Audio';
@@ -131,6 +173,28 @@
  * On Android WebView file://, dynamic import/fetch can be blocked.
  * Build pipeline inlines view.js into this page as createPatchView().
  */
+async function loadViewModule () {
+  // Happy path (desktop CHOC WebView etc.)
+  try {
+    return await import ('./view.js');
+  } catch (e1) {
+    console.warn ('Direct import of view.js failed, retrying via blob URL:', e1);
+  }
+
+  // Fallback: fetch the source text, wrap in a Blob, import that URL.
+  const resp = await fetch ('./view.js');
+  if (! resp.ok) throw new Error ('fetch view.js -> HTTP ' + resp.status);
+  const text = await resp.text();
+  const blob = new Blob ([text], { type: 'application/javascript' });
+  const url  = URL.createObjectURL (blob);
+  try {
+    return await import (url);
+  } finally {
+    // Free the blob even if import threw.
+    URL.revokeObjectURL (url);
+  }
+}
+
 (async function mount () {
   try {
     const create = window.createPatchView;
@@ -150,7 +214,10 @@
       + '<pre style="white-space:pre-wrap;color:#ff8080;">' + String (err && (err.stack || err.message || err)) + '</pre>'
       + '</div>';
   }
-})();
+})();})();
+</script>
+<script>
+/*__INLINE_VIEW_JS__*/
 </script>
 <script>
 /*__INLINE_VIEW_JS__*/
