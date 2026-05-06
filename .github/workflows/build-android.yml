@@ -194,10 +194,21 @@ jobs:
           cp .github/android-templates/android_bridge.cpp \
              AndroidProject/app/src/main/cpp/android_bridge.cpp
 
-          # Copy the WebView UI assets (view.js + index.html wrapper).
-          cp view.js   AndroidProject/app/src/main/assets/view.js
-          cp .github/android-templates/index.html \
-             AndroidProject/app/src/main/assets/index.html
+          # Build an Android-safe index.html with view.js inlined.
+          # Android WebView file:// blocks dynamic import/fetch in many configs.
+          python3 - <<'PYINLINE'
+          from pathlib import Path
+          template = Path('AndroidProject/app/src/main/assets/index.template.html')
+          template.write_text(Path('.github/android-templates/index.html').read_text())
+
+          view = Path('view.js').read_text()
+          view = view.replace('export default function createPatchView',
+                              'window.createPatchView = function createPatchView', 1)
+
+          html = template.read_text().replace('/*__INLINE_VIEW_JS__*/', view)
+          Path('AndroidProject/app/src/main/assets/index.html').write_text(html)
+          template.unlink()
+          PYINLINE
 
           echo "C++ source files:"
           find AndroidProject/app/src/main/cpp -maxdepth 2 -type f | head -20

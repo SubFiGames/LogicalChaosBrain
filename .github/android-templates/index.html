@@ -127,15 +127,16 @@
 })();
 
 /*
- * Load view.js and mount the patch view.  view.js exports createPatchView().
+ * Mount the patch view.
+ * On Android WebView file://, dynamic import/fetch can be blocked.
+ * Build pipeline inlines view.js into this page as createPatchView().
  */
 (async function mount () {
   try {
-    const mod = await import ('./view.js');
-    const create = mod.default || mod.createPatchView;
+    const create = window.createPatchView;
     if (typeof create !== 'function') {
       document.getElementById ('root').textContent =
-        'view.js loaded but createPatchView is not exported.';
+        'createPatchView() not found. Inline view.js injection failed.';
       return;
     }
     const view = await create (window.patchConnection);
@@ -145,11 +146,14 @@
     const root = document.getElementById ('root');
     root.innerHTML = '<div style="padding:24px;">'
       + '<h2>Logical Chaos Melody Machine</h2>'
-      + '<p style="color:#ff8080;">Failed to load view.js:</p>'
+      + '<p style="color:#ff8080;">Failed to initialise view:</p>'
       + '<pre style="white-space:pre-wrap;color:#ff8080;">' + String (err && (err.stack || err.message || err)) + '</pre>'
       + '</div>';
   }
 })();
+</script>
+<script>
+/*__INLINE_VIEW_JS__*/
 </script>
 </body>
 </html>
