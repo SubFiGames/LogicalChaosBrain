@@ -47,9 +47,14 @@
    - Removed stale undeclared variable usage: `engineStarted = true;`
    - Keeps runtime state consistent with declared fields: `engineCreated`, `audioRunning`.
 
+6. **WebView UI mount fix (blank UI root cause)**
+   - File: `.github/android-templates/index.html`
+   - Removed malformed script close sequence `})();})();` that broke JS parsing/execution.
+   - Removed duplicate `/*__INLINE_VIEW_JS__*/` placeholder so inline `view.js` injection is single and deterministic.
+
 ## Validation Performed
 - Testing agent runs completed with passing checks.
-- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`
+- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`
 - Added test coverage artifact: `/app/backend/tests/test_android_ci_templates.py`
 - Validated:
   - bridge structure no longer broken,
@@ -57,6 +62,7 @@
   - both APK artifact upload steps exist,
   - gradle template has debug/release native configuration.
   - MainActivity template has no stale `engineStarted` symbol.
+  - index.html + workflow-style inlined output script blocks parse successfully.
 
 ## Prioritized Backlog
 - **P0**
