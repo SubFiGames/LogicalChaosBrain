@@ -182,8 +182,26 @@
     _receiveEvent: notifyListeners,
   };
 
+  function pollNativeEvents () {
+    if (!host.pollOutputEvents) return;
+
+    let payload = '';
+    try { payload = host.pollOutputEvents() || ''; }
+    catch (e) { return; }
+
+    if (!payload) return;
+    const lines = String (payload).split ('\n');
+    for (const line of lines)
+    {
+      const n = Number (line.trim());
+      if (Number.isFinite (n))
+        notifyListeners ('stepToUI', n | 0);
+    }
+  }
+
   // Expose for view.js to pick up.
   window.patchConnection = connection;
+  setInterval (pollNativeEvents, 50);
 })();
 
 /*

@@ -77,6 +77,7 @@ public class MainActivity extends Activity
     private native void   nativeSendEvent       (String endpointID, double value);
     private native void   nativeSendParameter   (String endpointID, float  value);
     private native String nativeReadProgressLog();
+    private native String nativePollOutputEvents();
 
     //------------------------------------------------------------------------
     @Override
@@ -400,6 +401,14 @@ public class MainActivity extends Activity
         {
             try { return nativeReadProgressLog(); }
             catch (Throwable t) { return "(could not read progress: " + t.getMessage() + ")"; }
+        }
+
+        @JavascriptInterface
+        public String pollOutputEvents()
+        {
+            if (! engineCreated) return "";
+            try { return nativePollOutputEvents(); }
+            catch (Throwable t) { return ""; }
         }
     }
 }

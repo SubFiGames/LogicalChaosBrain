@@ -486,3 +486,67 @@ def test_android_bridge_set_step_packed_uses_llround_for_integer_safe_unpack():
 
     assert 'if (id == "setStepPacked")' in fallback_event_block
     assert "std::llround (value)" in fallback_event_block
+
+
+# Module: native->Java->JS polling path should be fully wired for output events
+def test_native_poll_output_events_path_is_wired_across_jni_mainactivity_and_index_poll_loop():
+    bridge_content = _read(BRIDGE_CPP)
+    main_activity = _read(MAIN_ACTIVITY_JAVA)
+    index_content = _read(INDEX_HTML)
+
+    jni_poll_block = _extract_block(
+        bridge_content,
+        "Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativePollOutputEvents",
+    )
+    assert "g_engine.pollOutputEvents()" in jni_poll_block
+
+    assert "private native String nativePollOutputEvents();" in main_activity
+    host_poll_block = _extract_block(main_activity, "public String pollOutputEvents()")
+    assert "if (! engineCreated) return \"\";" in host_poll_block
+    assert "return nativePollOutputEvents();" in host_poll_block
+
+    poll_js_block = _extract_block(index_content, "function pollNativeEvents ()")
+    assert "host.pollOutputEvents()" in poll_js_block
+    assert "notifyListeners ('stepToUI', n | 0);" in poll_js_block
+    assert "setInterval (pollNativeEvents, 50);" in index_content
+
+
+# Module: fallback engine should emit packed stepToUI messages for transport and pattern-dump updates
+def test_fallback_engine_emits_kind1_playback_and_kind2_pattern_messages():
+    content = _read(BRIDGE_CPP)
+    fallback_event_block = _extract_block(content, "void applyFallbackEvent (const std::string& id, double value)")
+    render_block = _extract_block(content, "void renderFallback (float* out, int32_t numFrames)")
+
+    assert "int packStepMessage (int kind, int step) const" in content
+    assert "queueUiEvent (packStepMessage (1, currentStep_));" in render_block
+    assert "queueUiEvent (packStepMessage (2, step));" in fallback_event_block
+    assert "queueUiEvent (packStepMessage (2, i));" in content
+
+
+# Module: fallback event queue should update UI for generate/clear/dump/setStepPacked operations
+def test_fallback_queue_updates_exist_for_generate_clear_dump_and_set_step_packed():
+    content = _read(BRIDGE_CPP)
+    fallback_event_block = _extract_block(content, "void applyFallbackEvent (const std::string& id, double value)")
+
+    assert 'if (id == "generate")' in fallback_event_block
+    assert "generateFallbackPattern();" in fallback_event_block
+    assert "queuePatternDump();" in fallback_event_block
+
+    assert 'if (id == "clearPattern")' in fallback_event_block
+    assert "for (int i = 0; i < 32; ++i) stepActive_[i] = 0;" in fallback_event_block
+    assert fallback_event_block.count("queuePatternDump();") >= 3
+
+    assert 'if (id == "requestPatternDump")' in fallback_event_block
+
+    assert 'if (id == "setStepPacked")' in fallback_event_block
+    assert "queueUiEvent (packStepMessage (2, step));" in fallback_event_block
+
+
+# Module: waveform selector should expose more than baseline Saw/Square choices in view UI
+def test_view_waveform_selector_includes_triangle_and_sine_options():
+    view_content = _read(VIEW_JS)
+
+    assert '<option value="0">Saw</option>' in view_content
+    assert '<option value="1">Square</option>' in view_content
+    assert '<option value="2">Triangle</option>' in view_content
+    assert '<option value="3">Sine</option>' in view_content

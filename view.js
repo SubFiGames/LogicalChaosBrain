@@ -301,6 +301,8 @@ export default function createPatchView (patchConnection)
                         <select id="synthWave">
                             <option value="0">Saw</option>
                             <option value="1">Square</option>
+                            <option value="2">Triangle</option>
+                            <option value="3">Sine</option>
                         </select>
                     </label>
                     <label>Cutoff

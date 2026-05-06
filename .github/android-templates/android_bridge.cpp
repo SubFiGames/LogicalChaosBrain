@@ -378,6 +378,12 @@ public:
         applyFallbackEvent (id, value);
     }
 
+    std::string pollOutputEvents()
+    {
+        std::lock_guard<std::mutex> lock (mutex_);
+        return popQueuedUiEvents();
+    }
+
     // --- oboe::AudioStreamDataCallback -----------------------------------
     oboe::DataCallbackResult onAudioReady (oboe::AudioStream*,
                                            void* audioData,
@@ -459,7 +465,7 @@ private:
         if (id == "synthRes")      return normalise (value, 0.1f, 0.95f);
         if (id == "synthEnvMod")   return normalise (value, 0.0f, 5000.0f);
         if (id == "synthDecay")    return normalise (value, 0.05f, 2.0f);
-        if (id == "synthWave")     return normalise (value, 0.0f, 1.0f);
+        if (id == "synthWave")     return normalise (value, 0.0f, 3.0f);
 
         // Fallback if unknown endpoint id ever appears.
         return juce::jlimit (0.0f, 1.0f, value);
@@ -483,7 +489,7 @@ private:
         if (id == "synthRes")      { synthRes_ = juce::jlimit (0.1f, 0.95f, value); return; }
         if (id == "synthEnvMod")   { synthEnvMod_ = juce::jlimit (0.0f, 5000.0f, value); return; }
         if (id == "synthDecay")    { synthDecay_ = juce::jlimit (0.05f, 2.0f, value); return; }
-        if (id == "synthWave")     { synthWave_ = clampInt ((int) std::lround (value), 0, 1); return; }
+        if (id == "synthWave")     { synthWave_ = clampInt ((int) std::lround (value), 0, 3); return; }
     }
 
     void generateFallbackPattern()
@@ -508,6 +514,29 @@ private:
         }
     }
 
+    int packStepMessage (int kind, int step) const
+    {
+        const int s = clampInt (step, 0, 31);
+        return (kind << 28)
+             | ((s              & 255) << 20)
+             | ((stepNotes_[s]  & 127) << 13)
+             | ((stepActive_[s] &   1) << 2)
+             | ((stepGlide_[s]  &   1) << 1)
+             |  (stepRandom_[s] &   1);
+    }
+
+    void queueUiEvent (int packed)
+    {
+        if (pendingUiEvents_.size() < 4096)
+            pendingUiEvents_.push_back (packed);
+    }
+
+    void queuePatternDump()
+    {
+        for (int i = 0; i < 32; ++i)
+            queueUiEvent (packStepMessage (2, i));
+    }
+
     void applyFallbackEvent (const std::string& id, double value)
     {
         if (value == 0.0f) return;
@@ -525,18 +554,27 @@ private:
             isPlaying_ = false;
             envActive_ = false;
             envLevel_ = 0.0f;
+            queueUiEvent ((1 << 28) | (255 << 20));
             return;
         }
 
         if (id == "generate")
         {
             generateFallbackPattern();
+            queuePatternDump();
             return;
         }
 
         if (id == "clearPattern")
         {
             for (int i = 0; i < 32; ++i) stepActive_[i] = 0;
+            queuePatternDump();
+            return;
+        }
+
+        if (id == "requestPatternDump")
+        {
+            queuePatternDump();
             return;
         }
 
@@ -550,6 +588,7 @@ private:
                 stepActive_[step] = (packed >> 2) & 1;
                 stepGlide_[step] = (packed >> 1) & 1;
                 stepRandom_[step] = packed & 1;
+                queueUiEvent (packStepMessage (2, step));
             }
             return;
         }
@@ -587,6 +626,8 @@ private:
                         envActive_ = false;
                     }
 
+                    queueUiEvent (packStepMessage (1, currentStep_));
+
                     const float safeTempo = juce::jmax (1.0f, tempo_);
                     const float quarter = (float) (sr * 60.0 / safeTempo);
                     stepSamplesRemaining_ = juce::jmax (1, (int) (quarter * 0.25f));
@@ -621,7 +662,11 @@ private:
 
             const float osc = (synthWave_ == 0)
                             ? (float) (phase_ * 2.0 - 1.0)
-                            : (phase_ < 0.5 ? 1.0f : -1.0f);
+                            : (synthWave_ == 1)
+                                ? (phase_ < 0.5 ? 1.0f : -1.0f)
+                                : (synthWave_ == 2)
+                                    ? (float) (1.0 - 4.0 * std::abs (phase_ - 0.5))
+                                    : (float) std::sin (phase_ * 6.28318530718);
 
             float modCutoff = synthCutoff_ + synthEnvMod_ * envLevel_;
             modCutoff = juce::jlimit (20.0f, 10000.0f, modCutoff);
@@ -640,6 +685,22 @@ private:
             out[2 * i] = outSample;
             out[2 * i + 1] = outSample;
         }
+    }
+
+    std::string popQueuedUiEvents()
+    {
+        if (pendingUiEvents_.empty())
+            return {};
+
+        std::string out;
+        out.reserve (pendingUiEvents_.size() * 12);
+        for (size_t i = 0; i < pendingUiEvents_.size(); ++i)
+        {
+            if (i != 0) out.push_back ('\n');
+            out += std::to_string (pendingUiEvents_[i]);
+        }
+        pendingUiEvents_.clear();
+        return out;
     }
 
     juce::AudioProcessorParameter* findParam (const std::string& idOrName)
@@ -684,6 +745,7 @@ private:
                                                 0,0,0,0,0,0,0,0 };
     int                                   stepGlide_[32]   = { 0 };
     int                                   stepRandom_[32]  = { 0 };
+    std::vector<int>                      pendingUiEvents_;
 
     float                                 tempo_           = 120.0f;
     float                                 chaos_           = 35.0f;
@@ -816,6 +878,14 @@ Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativeReadProgressLo
     (JNIEnv* env, jobject)
 {
     std::string s = readWholeFile (g_progressLogPath);
+    return env->NewStringUTF (s.c_str());
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativePollOutputEvents
+    (JNIEnv* env, jobject)
+{
+    std::string s = g_engine.pollOutputEvents();
     return env->NewStringUTF (s.c_str());
 }
 
