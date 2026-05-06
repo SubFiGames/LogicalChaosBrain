@@ -74,9 +74,14 @@
    - Split JS bridge routing: event endpoints use `sendEvent`, value endpoints use `sendParameter`.
    - Fixed native parameter handling to convert raw UI values with `convertTo0to1(...)` before `setValueNotifyingHost(...)`.
 
+11. **Compile-safe normalization fix (JUCE API compatibility)**
+   - File: `.github/android-templates/android_bridge.cpp`
+   - Replaced unavailable JUCE API call (`AudioProcessorParameter::convertTo0to1`) with manual endpoint-based normalization.
+   - Added normalization ranges aligned with `Main.cmajor` value endpoints (tempo, chaos, density, gate, steps, root note, synth params).
+
 ## Validation Performed
 - Testing agent runs completed with passing checks.
-- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`, `/app/test_reports/iteration_4.json`, `/app/test_reports/iteration_5.json`, `/app/test_reports/iteration_6.json`, `/app/test_reports/iteration_7.json`
+- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`, `/app/test_reports/iteration_4.json`, `/app/test_reports/iteration_5.json`, `/app/test_reports/iteration_6.json`, `/app/test_reports/iteration_7.json`, `/app/test_reports/iteration_8.json`
 - Added test coverage artifact: `/app/backend/tests/test_android_ci_templates.py`
 - Validated:
   - bridge structure no longer broken,
@@ -89,6 +94,7 @@
   - release template now enforces lld + IPO/LTO-off safeguards.
   - workflow guarantees debug artifact output even when release native linker fails.
   - control routing/normalization path now matches Main.cmajor endpoint types.
+  - bridge now compiles with JUCE version in CI runner (no missing API call).
 
 ## Prioritized Backlog
 - **P0**
