@@ -325,12 +325,13 @@ def test_workflow_inlined_output_executes_mount_after_create_patch_view_definiti
     assert mount_trigger_idx > inline_script_idx, "Mount trigger executes before createPatchView definition"
 
 
-# Module: native bridge must run in functional JUCE processor mode (not forced fallback)
-def test_android_bridge_create_enables_juce_processor_functional_mode():
+# Module: native bridge create path should keep JUCE processor disabled for crash-safe Android mode
+def test_android_bridge_create_disables_juce_processor_creation_for_crash_safe_mode():
     content = _read(BRIDGE_CPP)
     create_block = _extract_block(content, "std::string create()")
 
-    assert "useJuceProcessor_ = true;" in create_block
+    assert "useJuceProcessor_ = false;" in create_block
+    assert "if (useJuceProcessor_)" in create_block
     assert "processor_.reset (createPluginFilter());" in create_block
     assert "if (processor_ == nullptr)" in create_block
 
@@ -403,3 +404,67 @@ def test_index_event_endpoint_set_matches_cmajor_event_definitions_and_excludes_
 
     assert expected_events.issubset(cmajor_events)
     assert event_endpoints.isdisjoint(cmajor_values)
+
+
+# Module: fallback handlers must be wired when processor is unavailable
+def test_android_bridge_fallback_parameter_and_event_handlers_are_wired_when_processor_is_null():
+    content = _read(BRIDGE_CPP)
+    send_param_block = _extract_block(content, "void sendParameter (const std::string& id, float value)")
+    send_event_block = _extract_block(content, "void sendEvent (const std::string& id, float value)")
+
+    assert "if (processor_ != nullptr)" in send_param_block
+    assert "applyFallbackParameter (id, value);" in send_param_block
+    assert "if (processor_ != nullptr)" in send_event_block
+    assert "applyFallbackEvent (id, value);" in send_event_block
+
+
+# Module: audio callback should use fallback renderer path (not fixed sine tone) when processor is null
+def test_android_bridge_audio_callback_uses_render_fallback_in_processor_null_path():
+    content = _read(BRIDGE_CPP)
+    callback_block = _extract_block(
+        content,
+        "oboe::DataCallbackResult onAudioReady (oboe::AudioStream*,",
+    )
+
+    assert "if (processor_ == nullptr || numProcChannels_ == 0)" in callback_block
+    assert "renderFallback (out, numFrames);" in callback_block
+    assert "std::sin" not in callback_block
+
+
+# Module: fallback state coverage for core controls and synth/filter parameter surface
+def test_android_bridge_fallback_state_covers_core_control_events_and_parameters():
+    content = _read(BRIDGE_CPP)
+    fallback_param_block = _extract_block(content, "void applyFallbackParameter (const std::string& id, float value)")
+    fallback_event_block = _extract_block(content, "void applyFallbackEvent (const std::string& id, float value)")
+
+    required_param_ids = {
+        "tempo",
+        "synthWave",
+        "synthCutoff",
+        "synthRes",
+        "synthEnvMod",
+        "synthDecay",
+    }
+    required_event_ids = {"play", "stop", "generate", "setStepPacked"}
+
+    handled_params = set(re.findall(r'if \(id == "([^"]+)"\)', fallback_param_block))
+    handled_events = set(re.findall(r'if \(id == "([^"]+)"\)', fallback_event_block))
+
+    assert required_param_ids.issubset(handled_params), (
+        f"Missing fallback params: {sorted(required_param_ids - handled_params)}"
+    )
+    assert required_event_ids.issubset(handled_events), (
+        f"Missing fallback events: {sorted(required_event_ids - handled_events)}"
+    )
+
+
+# Module: JNI event payload currently downcasts double to float (risk for packed bitfield precision)
+def test_android_bridge_jni_event_path_uses_float_downcast_for_event_value_payload():
+    content = _read(BRIDGE_CPP)
+    jni_event_block = _extract_block(
+        content,
+        "Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativeSendEvent",
+    )
+
+    assert "jdouble value" in jni_event_block
+    assert "(float) value" in jni_event_block

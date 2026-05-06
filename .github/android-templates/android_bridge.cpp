@@ -168,9 +168,9 @@ public:
 
         try
         {
-            // Functional mode: create the JUCE/Cmajor processor so UI controls
-            // can drive real parameters/events instead of the sine fallback.
-            useJuceProcessor_ = true;
+            // Stable Android mode: avoid JUCE plugin bootstrap crash path.
+            // DSP/control behaviour is handled by the native fallback engine.
+            useJuceProcessor_ = false;
             if (useJuceProcessor_)
             {
                 LOGI ("Engine::create — calling createPluginFilter()");
@@ -333,38 +333,48 @@ public:
     void sendParameter (const std::string& id, float value)
     {
         std::lock_guard<std::mutex> lock (mutex_);
-        if (auto* p = findParam (id))
+        if (processor_ != nullptr)
         {
-            // JS sends real-world values (e.g., tempo=120). JUCE expects 0..1.
-            const float normalised = normaliseParameterValue (id, value);
-            p->beginChangeGesture();
-            p->setValueNotifyingHost (normalised);
-            p->endChangeGesture();
-            LOGI ("Param set: %s raw=%f norm=%f", id.c_str(), value, normalised);
-        }
-        else
-        {
+            if (auto* p = findParam (id))
+            {
+                // JS sends real-world values (e.g., tempo=120). JUCE expects 0..1.
+                const float normalised = normaliseParameterValue (id, value);
+                p->beginChangeGesture();
+                p->setValueNotifyingHost (normalised);
+                p->endChangeGesture();
+                LOGI ("Param set: %s raw=%f norm=%f", id.c_str(), value, normalised);
+                return;
+            }
+
             LOGW ("Param NOT FOUND: %s", id.c_str());
+            return;
         }
+
+        applyFallbackParameter (id, value);
     }
 
     void sendEvent (const std::string& id, float value)
     {
         std::lock_guard<std::mutex> lock (mutex_);
-        if (auto* p = findParam (id))
+        if (processor_ != nullptr)
         {
-            // Rising-edge trigger for Cmajor event endpoints exported as
-            // momentary parameters.
-            p->beginChangeGesture();
-            p->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, value));
-            p->setValueNotifyingHost (0.0f);
-            p->endChangeGesture();
-            LOGI ("Event fired: %s (val=%f)", id.c_str(), value);
-        }
-        else
-        {
+            if (auto* p = findParam (id))
+            {
+                // Rising-edge trigger for Cmajor event endpoints exported as
+                // momentary parameters.
+                p->beginChangeGesture();
+                p->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, value));
+                p->setValueNotifyingHost (0.0f);
+                p->endChangeGesture();
+                LOGI ("Event fired: %s (val=%f)", id.c_str(), value);
+                return;
+            }
+
             LOGW ("Event endpoint NOT FOUND: %s", id.c_str());
+            return;
         }
+
+        applyFallbackEvent (id, value);
     }
 
     // --- oboe::AudioStreamDataCallback -----------------------------------
@@ -376,18 +386,8 @@ public:
 
         if (processor_ == nullptr || numProcChannels_ == 0)
         {
-            const float amp = 0.05f;
-            const float freq = 220.0f;
-            const double sr = sampleRate_ > 0.0 ? sampleRate_ : 48000.0;
-            for (int i = 0; i < numFrames; ++i)
-            {
-                const float v = amp * std::sin ((float) phase_ * 6.28318530718f);
-                phase_ += freq / sr;
-                if (phase_ >= 1.0)
-                    phase_ -= 1.0;
-                out[2 * i] = v;
-                out[2 * i + 1] = v;
-            }
+            std::lock_guard<std::mutex> lock (mutex_);
+            renderFallback (out, numFrames);
             return oboe::DataCallbackResult::Continue;
         }
 
@@ -464,6 +464,183 @@ private:
         return juce::jlimit (0.0f, 1.0f, value);
     }
 
+    static int clampInt (int v, int lo, int hi)
+    {
+        return (v < lo ? lo : (v > hi ? hi : v));
+    }
+
+    void applyFallbackParameter (const std::string& id, float value)
+    {
+        if (id == "tempo")         { tempo_ = juce::jlimit (50.0f, 220.0f, value); return; }
+        if (id == "chaos")         { chaos_ = juce::jlimit (0.0f, 100.0f, value); return; }
+        if (id == "density")       { density_ = juce::jlimit (0.0f, 100.0f, value); return; }
+        if (id == "gate")          { gate_ = juce::jlimit (5.0f, 100.0f, value); return; }
+        if (id == "patternLength") { patternLength_ = clampInt ((int) std::lround (value), 8, 32); return; }
+        if (id == "rootNote")      { rootNote_ = clampInt ((int) std::lround (value), 36, 72); return; }
+
+        if (id == "synthCutoff")   { synthCutoff_ = juce::jlimit (50.0f, 5000.0f, value); return; }
+        if (id == "synthRes")      { synthRes_ = juce::jlimit (0.1f, 0.95f, value); return; }
+        if (id == "synthEnvMod")   { synthEnvMod_ = juce::jlimit (0.0f, 5000.0f, value); return; }
+        if (id == "synthDecay")    { synthDecay_ = juce::jlimit (0.05f, 2.0f, value); return; }
+        if (id == "synthWave")     { synthWave_ = clampInt ((int) std::lround (value), 0, 1); return; }
+    }
+
+    void generateFallbackPattern()
+    {
+        const int len = clampInt (patternLength_, 1, 32);
+        for (int i = 0; i < len; ++i)
+        {
+            seed_ = seed_ * 1103515245 + 12345;
+            const float r = (float) (seed_ & 0x7fffffff) / 2147483647.0f;
+
+            stepActive_[i] = (r < (density_ / 100.0f)) ? 1 : 0;
+            if (i == 0) stepActive_[i] = 1;
+
+            const int octave = ((seed_ >> 4) % 3);
+            const int degree = ((seed_ >> 8) % 5) * 2;
+            stepNotes_[i] = rootNote_ + degree + (octave * 12);
+
+            seed_ = seed_ * 1103515245 + 12345;
+            stepGlide_[i] = (((seed_ >> 2) % 100) < (int) chaos_) ? 1 : 0;
+            seed_ = seed_ * 1103515245 + 12345;
+            stepRandom_[i] = (((seed_ >> 6) % 100) < 20) ? 1 : 0;
+        }
+    }
+
+    void applyFallbackEvent (const std::string& id, float value)
+    {
+        if (value == 0.0f) return;
+
+        if (id == "play")
+        {
+            isPlaying_ = true;
+            currentStep_ = 0;
+            stepSamplesRemaining_ = 0;
+            return;
+        }
+
+        if (id == "stop")
+        {
+            isPlaying_ = false;
+            envActive_ = false;
+            envLevel_ = 0.0f;
+            return;
+        }
+
+        if (id == "generate")
+        {
+            generateFallbackPattern();
+            return;
+        }
+
+        if (id == "clearPattern")
+        {
+            for (int i = 0; i < 32; ++i) stepActive_[i] = 0;
+            return;
+        }
+
+        if (id == "setStepPacked")
+        {
+            const int packed = (int) std::lround (value);
+            const int step = (packed >> 20) & 255;
+            if (step >= 0 && step < 32)
+            {
+                stepNotes_[step] = (packed >> 13) & 127;
+                stepActive_[step] = (packed >> 2) & 1;
+                stepGlide_[step] = (packed >> 1) & 1;
+                stepRandom_[step] = packed & 1;
+            }
+            return;
+        }
+    }
+
+    void renderFallback (float* out, int32_t numFrames)
+    {
+        const double sr = sampleRate_ > 0.0 ? sampleRate_ : 48000.0;
+        const float pi = 3.14159265359f;
+
+        for (int i = 0; i < numFrames; ++i)
+        {
+            if (isPlaying_)
+            {
+                if (stepSamplesRemaining_ <= 0)
+                {
+                    const int len = clampInt (patternLength_, 1, 32);
+                    if (currentStep_ < 0 || currentStep_ >= len)
+                        currentStep_ = 0;
+
+                    const int note = stepNotes_[currentStep_];
+                    const int prev = (currentStep_ == 0 ? len - 1 : currentStep_ - 1);
+                    const bool previousGlide = stepGlide_[prev] != 0;
+
+                    if (stepActive_[currentStep_] != 0)
+                    {
+                        targetFreq_ = 440.0f * std::pow (2.0f, (note - 69) / 12.0f);
+                        envLevel_ = 1.0f;
+                        envActive_ = true;
+                        if (! previousGlide)
+                            currentFreq_ = targetFreq_;
+                    }
+                    else
+                    {
+                        envActive_ = false;
+                    }
+
+                    const float safeTempo = juce::jmax (1.0f, tempo_);
+                    const float quarter = (float) (sr * 60.0 / safeTempo);
+                    stepSamplesRemaining_ = juce::jmax (1, (int) (quarter * 0.25f));
+
+                    const float gateAmt = juce::jlimit (0.0f, 1.0f, gate_ / 100.0f);
+                    if (gateAmt < 0.99f && envActive_)
+                    {
+                        const int noteOffAt = (int) (quarter * 0.25f * gateAmt);
+                        if (noteOffAt < stepSamplesRemaining_)
+                            stepSamplesRemaining_ = noteOffAt + 1;
+                    }
+
+                    currentStep_ = (currentStep_ + 1) % len;
+                }
+
+                --stepSamplesRemaining_;
+            }
+
+            currentFreq_ = currentFreq_ + (targetFreq_ - currentFreq_) * 0.001f;
+
+            if (envLevel_ > 0.0f)
+            {
+                const float safeDecay = juce::jmax (0.001f, synthDecay_);
+                envLevel_ -= 1.0f / (safeDecay * (float) sr);
+                if (envLevel_ < 0.0f)
+                    envLevel_ = 0.0f;
+            }
+
+            phase_ += currentFreq_ / sr;
+            if (phase_ >= 1.0)
+                phase_ -= 1.0;
+
+            const float osc = (synthWave_ == 0)
+                            ? (float) (phase_ * 2.0 - 1.0)
+                            : (phase_ < 0.5 ? 1.0f : -1.0f);
+
+            float modCutoff = synthCutoff_ + synthEnvMod_ * envLevel_;
+            modCutoff = juce::jlimit (20.0f, 10000.0f, modCutoff);
+
+            float f = modCutoff * 2.0f * pi / (float) sr;
+            f = juce::jlimit (0.0f, 0.99f, f);
+
+            float q = 1.0f - synthRes_;
+            q = juce::jlimit (0.01f, 0.99f, q);
+
+            const float hp = osc - lp_ - (q * bp_);
+            bp_ += f * hp;
+            lp_ += f * bp_;
+
+            const float outSample = lp_ * envLevel_ * 0.5f;
+            out[2 * i] = outSample;
+            out[2 * i + 1] = outSample;
+        }
+    }
+
     juce::AudioProcessorParameter* findParam (const std::string& idOrName)
     {
         if (processor_ == nullptr) return nullptr;
@@ -492,6 +669,44 @@ private:
     bool                                  useJuceProcessor_= false;
     double                                sampleRate_      = 48000.0;
     double                                phase_           = 0.0;
+
+    // Fallback synth/sequencer state (used when JUCE processor is disabled).
+    int                                   stepNotes_[32]   = {
+                                                48,48,48,48,48,48,48,48,
+                                                48,48,48,48,48,48,48,48,
+                                                48,48,48,48,48,48,48,48,
+                                                48,48,48,48,48,48,48,48 };
+    int                                   stepActive_[32]  = {
+                                                1,1,1,1,1,1,1,1,
+                                                1,1,1,1,1,1,1,1,
+                                                0,0,0,0,0,0,0,0,
+                                                0,0,0,0,0,0,0,0 };
+    int                                   stepGlide_[32]   = { 0 };
+    int                                   stepRandom_[32]  = { 0 };
+
+    float                                 tempo_           = 120.0f;
+    float                                 chaos_           = 35.0f;
+    float                                 density_         = 78.0f;
+    float                                 gate_            = 72.0f;
+    int                                   patternLength_   = 16;
+    int                                   rootNote_        = 48;
+
+    float                                 synthCutoff_     = 800.0f;
+    float                                 synthRes_        = 0.6f;
+    float                                 synthEnvMod_     = 2000.0f;
+    float                                 synthDecay_      = 0.3f;
+    int                                   synthWave_       = 0;
+
+    int                                   seed_            = 1234567;
+    bool                                  isPlaying_       = false;
+    int                                   currentStep_     = 0;
+    int                                   stepSamplesRemaining_ = 0;
+    float                                 currentFreq_     = 100.0f;
+    float                                 targetFreq_      = 100.0f;
+    float                                 envLevel_        = 0.0f;
+    bool                                  envActive_       = false;
+    float                                 lp_              = 0.0f;
+    float                                 bp_              = 0.0f;
 };
 
 static Engine g_engine;

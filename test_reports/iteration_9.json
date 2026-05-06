@@ -1,0 +1,37 @@
+{
+  "summary": "Completed backend-only regression testing for Android native fallback crash fix path. Verified JUCE processor creation remains disabled in create(), fallback handlers are wired when processor is null, onAudioReady routes to renderFallback, and fallback controls/params cover requested core surface.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_android_ci_templates.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Run Android device/emulator runtime validation for Start Audio to confirm native SIGSEGV is resolved under real Oboe thread execution.",
+    "Review setStepPacked payload path: JNI nativeSendEvent downcasts jdouble to float before bit-unpack, which can lose low bits for packed integer payloads."
+  ],
+  "critical_code_review_comments": [
+    "Static/template checks are green for requested fallback behaviors, but they cannot prove runtime audio-thread stability.",
+    "Potential correctness risk remains: nativeSendEvent casts event payload to float, which may corrupt packed bitfield precision for setStepPacked values above float exact-int range."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_android_ci_templates.py",
+    "/app/test_reports/iteration_9.json"
+  ],
+  "success_rate": {
+    "backend": "100% (30/30)",
+    "frontend": "N/A (skipped by request)"
+  },
+  "seed_data_creation": "",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Added 4 new regression tests for fallback mode (processor disabled create path, null-processor fallback handlers, renderFallback callback path, required fallback controls/params) and 1 static guard test documenting JNI event float downcast presence. Runtime Android validation still pending.",
+  "rca of the issue": "Likely prior crash root cause was entering JUCE processor creation path (createPluginFilter) during nativeStart in Android context. Current patch gates that path off (useJuceProcessor_=false) and uses fallback synth/sequencer state/rendering, removing the risky processor bootstrap from startup. No MOCKED APIs used."
+}
