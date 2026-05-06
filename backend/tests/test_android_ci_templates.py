@@ -335,14 +335,38 @@ def test_android_bridge_create_enables_juce_processor_functional_mode():
     assert "if (processor_ == nullptr)" in create_block
 
 
-# Module: native parameter bridge must convert raw value using JUCE normalize helper
-def test_android_bridge_send_parameter_uses_convert_to_0to1_before_host_notify():
+# Module: native parameter bridge must avoid unavailable JUCE convertTo0to1 API
+def test_android_bridge_has_no_convert_to_0to1_usage_after_manual_normalization_fix():
+    content = _read(BRIDGE_CPP)
+    assert "convertTo0to1" not in content
+
+
+# Module: native parameter bridge must normalize raw values with internal helper before host notify
+def test_android_bridge_send_parameter_uses_manual_normalization_helper_before_host_notify():
     content = _read(BRIDGE_CPP)
     send_param_block = _extract_block(content, "void sendParameter (const std::string& id, float value)")
 
-    assert "p->convertTo0to1 (value)" in send_param_block
+    assert "normaliseParameterValue (id, value)" in send_param_block
     assert "const float normalised" in send_param_block
     assert "p->setValueNotifyingHost (normalised);" in send_param_block
+
+
+# Module: normalization lookup table must cover all Main.cmajor value endpoints
+def test_android_bridge_manual_normalization_table_covers_all_cmajor_value_endpoints():
+    bridge_content = _read(BRIDGE_CPP)
+    cmajor_content = _read(MAIN_CMAJOR)
+
+    normalize_block = _extract_block(
+        bridge_content,
+        "static float normaliseParameterValue (const std::string& id, float value)",
+    )
+
+    handled_ids = set(re.findall(r'if \(id == "([^"]+)"\)', normalize_block))
+    cmajor_values = _extract_cmajor_inputs(cmajor_content, "value")
+
+    assert cmajor_values.issubset(handled_ids), (
+        f"Missing normalization entries for: {sorted(cmajor_values - handled_ids)}"
+    )
 
 
 # Module: JS bridge should route event endpoints to sendEvent and others to sendParameter

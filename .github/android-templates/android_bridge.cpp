@@ -336,7 +336,7 @@ public:
         if (auto* p = findParam (id))
         {
             // JS sends real-world values (e.g., tempo=120). JUCE expects 0..1.
-            const float normalised = juce::jlimit (0.0f, 1.0f, p->convertTo0to1 (value));
+            const float normalised = normaliseParameterValue (id, value);
             p->beginChangeGesture();
             p->setValueNotifyingHost (normalised);
             p->endChangeGesture();
@@ -439,6 +439,31 @@ public:
     }
 
 private:
+    static float normalise (float v, float lo, float hi)
+    {
+        if (hi <= lo) return juce::jlimit (0.0f, 1.0f, v);
+        return juce::jlimit (0.0f, 1.0f, (v - lo) / (hi - lo));
+    }
+
+    static float normaliseParameterValue (const std::string& id, float value)
+    {
+        if (id == "tempo")         return normalise (value, 50.0f, 220.0f);
+        if (id == "chaos")         return normalise (value, 0.0f, 100.0f);
+        if (id == "density")       return normalise (value, 0.0f, 100.0f);
+        if (id == "gate")          return normalise (value, 5.0f, 100.0f);
+        if (id == "patternLength") return normalise (value, 8.0f, 32.0f);
+        if (id == "rootNote")      return normalise (value, 36.0f, 72.0f);
+
+        if (id == "synthCutoff")   return normalise (value, 50.0f, 5000.0f);
+        if (id == "synthRes")      return normalise (value, 0.1f, 0.95f);
+        if (id == "synthEnvMod")   return normalise (value, 0.0f, 5000.0f);
+        if (id == "synthDecay")    return normalise (value, 0.05f, 2.0f);
+        if (id == "synthWave")     return normalise (value, 0.0f, 1.0f);
+
+        // Fallback if unknown endpoint id ever appears.
+        return juce::jlimit (0.0f, 1.0f, value);
+    }
+
     juce::AudioProcessorParameter* findParam (const std::string& idOrName)
     {
         if (processor_ == nullptr) return nullptr;

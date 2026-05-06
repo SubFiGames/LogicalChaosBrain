@@ -1,0 +1,37 @@
+{
+  "summary": "Completed backend-only regression verification for the Android control-path compile fix. Confirmed android bridge no longer uses unavailable JUCE convertTo0to1 API, sendParameter uses manual endpoint normalization, normalization table covers all Main.cmajor value endpoints, and template script/native path checks remain green.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_android_ci_templates.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Run the GitHub Android build once to validate compile success on runner after template generation.",
+    "Optionally add a device/emulator smoke run to validate runtime parameter behavior beyond static/template regression checks."
+  ],
+  "critical_code_review_comments": [
+    "Previous regression test expected removed API convertTo0to1 and was stale; updated assertions now match current manual normalization implementation.",
+    "No remaining critical defects found in requested files for this compile-fix scope."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_android_ci_templates.py",
+    "/app/test_reports/iteration_8.json"
+  ],
+  "success_rate": {
+    "backend": "100% (26/26)",
+    "frontend": "N/A (skipped by request)"
+  },
+  "seed_data_creation": "",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Added three targeted tests: (1) assert no convertTo0to1 usage in android_bridge.cpp, (2) assert sendParameter uses normaliseParameterValue before setValueNotifyingHost, (3) assert normalization table covers all Main.cmajor input value endpoints. Existing template/script path and JS syntax regressions remain passing.",
+  "rca of the issue": "Root cause was reliance on AudioProcessorParameter::convertTo0to1 in android_bridge.cpp, which is unavailable for this JUCE API surface in CI build context. Compile-safe mitigation is manual per-endpoint normalization using Main.cmajor ranges, then passing normalized values to setValueNotifyingHost. No MOCKED APIs used."
+}
