@@ -52,9 +52,14 @@
    - Removed malformed script close sequence `})();})();` that broke JS parsing/execution.
    - Removed duplicate `/*__INLINE_VIEW_JS__*/` placeholder so inline `view.js` injection is single and deterministic.
 
+7. **WebView mount-order fix (createPatchView race)**
+   - File: `.github/android-templates/index.html`
+   - Changed immediate mount IIFE to deferred function: `window.mountPatchView = async function ...`.
+   - Added explicit post-inline trigger script to call `window.mountPatchView()` only after inlined `view.js` executes.
+
 ## Validation Performed
 - Testing agent runs completed with passing checks.
-- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`
+- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`, `/app/test_reports/iteration_4.json`
 - Added test coverage artifact: `/app/backend/tests/test_android_ci_templates.py`
 - Validated:
   - bridge structure no longer broken,
@@ -63,6 +68,7 @@
   - gradle template has debug/release native configuration.
   - MainActivity template has no stale `engineStarted` symbol.
   - index.html + workflow-style inlined output script blocks parse successfully.
+  - mount trigger now runs after inline `createPatchView` definition.
 
 ## Prioritized Backlog
 - **P0**
