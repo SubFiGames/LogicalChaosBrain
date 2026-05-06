@@ -155,6 +155,31 @@ def test_index_template_has_no_duplicate_iife_closer_sequence():
     assert "})();})();" not in content
 
 
+# Module: index template must not trigger mount before inline view.js executes
+def test_index_template_has_no_pre_inline_mount_invocation():
+    content = _read(INDEX_HTML)
+    marker = "/*__INLINE_VIEW_JS__*/"
+    marker_idx = content.find(marker)
+    assert marker_idx != -1, "Inline placeholder marker missing"
+
+    pre_inline = content[:marker_idx]
+    assert "window.mountPatchView();" not in pre_inline
+    assert "mountPatchView();" not in pre_inline
+
+
+# Module: index template must include explicit post-inline mount trigger
+def test_index_template_has_post_inline_mount_trigger_after_placeholder():
+    content = _read(INDEX_HTML)
+    marker = "/*__INLINE_VIEW_JS__*/"
+
+    marker_idx = content.find(marker)
+    trigger_idx = content.find("window.mountPatchView();")
+
+    assert marker_idx != -1, "Inline placeholder marker missing"
+    assert trigger_idx != -1, "Post-inline mount trigger missing"
+    assert trigger_idx > marker_idx, "Mount trigger appears before inline view injection"
+
+
 # Module: Android index template script blocks must be valid JS before inlining
 def test_index_template_inline_scripts_are_syntax_valid():
     content = _read(INDEX_HTML)
@@ -184,3 +209,31 @@ def test_workflow_inlined_index_output_scripts_are_syntax_valid():
     assert len(scripts) >= 3
     for idx, script in enumerate(scripts, start=1):
         _assert_js_syntax_valid(script, f"inlined index.html script #{idx}")
+
+
+# Module: workflow-style inline output should define createPatchView before mount call script
+def test_workflow_inlined_output_executes_mount_after_create_patch_view_definition():
+    template = _read(INDEX_HTML)
+    view = _read(VIEW_JS)
+
+    transformed_view = view.replace(
+        "export default function createPatchView",
+        "window.createPatchView = function createPatchView",
+        1,
+    )
+    inlined_html = template.replace("/*__INLINE_VIEW_JS__*/", transformed_view)
+
+    scripts = _extract_inline_scripts(inlined_html)
+    assert len(scripts) >= 3
+
+    inline_script_idx = None
+    mount_trigger_idx = None
+    for idx, script in enumerate(scripts):
+        if "window.createPatchView = function createPatchView" in script:
+            inline_script_idx = idx
+        if "window.mountPatchView();" in script:
+            mount_trigger_idx = idx
+
+    assert inline_script_idx is not None, "Transformed inline createPatchView definition not found"
+    assert mount_trigger_idx is not None, "Mount trigger script not found"
+    assert mount_trigger_idx > inline_script_idx, "Mount trigger executes before createPatchView definition"

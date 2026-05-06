@@ -1,0 +1,33 @@
+{
+  "summary": "Executed backend-only regression validation for Android template mount timing/order and workflow inline transformation. All targeted checks passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_android_ci_templates.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Run GitHub Actions Android build to confirm runtime behavior in real APK/WebView, since this run is static/parser-level regression testing."
+  ],
+  "critical_code_review_comments": [],
+  "updated_files": [
+    "/app/backend/tests/test_android_ci_templates.py",
+    "/app/test_reports/iteration_4.json"
+  ],
+  "success_rate": {
+    "backend": "100% (14/14)",
+    "frontend": "N/A (skipped by request)"
+  },
+  "seed_data_creation": "",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Added explicit regression checks for mount timing/order: no pre-inline mount invocation, required post-inline trigger, and transformed inline createPatchView definition occurring before mount trigger execution.",
+  "rca of the issue": "The original blank UI symptom is consistent with mount timing/order regression: if mount executes before inline view.js assigns window.createPatchView, root renders 'createPatchView() not found'. Current index/workflow state defers mount via window.mountPatchView and triggers it only after inline script block, preventing that race."
+}
