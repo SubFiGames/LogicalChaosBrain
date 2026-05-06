@@ -410,12 +410,20 @@ def test_index_event_endpoint_set_matches_cmajor_event_definitions_and_excludes_
 def test_android_bridge_fallback_parameter_and_event_handlers_are_wired_when_processor_is_null():
     content = _read(BRIDGE_CPP)
     send_param_block = _extract_block(content, "void sendParameter (const std::string& id, float value)")
-    send_event_block = _extract_block(content, "void sendEvent (const std::string& id, float value)")
+    send_event_block = _extract_block(content, "void sendEvent (const std::string& id, double value)")
 
     assert "if (processor_ != nullptr)" in send_param_block
     assert "applyFallbackParameter (id, value);" in send_param_block
     assert "if (processor_ != nullptr)" in send_event_block
     assert "applyFallbackEvent (id, value);" in send_event_block
+
+
+# Module: event function signatures should keep double precision for packed payload flow
+def test_android_bridge_event_signatures_use_double_for_engine_and_fallback_paths():
+    content = _read(BRIDGE_CPP)
+
+    assert "void sendEvent (const std::string& id, double value)" in content
+    assert "void applyFallbackEvent (const std::string& id, double value)" in content
 
 
 # Module: audio callback should use fallback renderer path (not fixed sine tone) when processor is null
@@ -435,7 +443,7 @@ def test_android_bridge_audio_callback_uses_render_fallback_in_processor_null_pa
 def test_android_bridge_fallback_state_covers_core_control_events_and_parameters():
     content = _read(BRIDGE_CPP)
     fallback_param_block = _extract_block(content, "void applyFallbackParameter (const std::string& id, float value)")
-    fallback_event_block = _extract_block(content, "void applyFallbackEvent (const std::string& id, float value)")
+    fallback_event_block = _extract_block(content, "void applyFallbackEvent (const std::string& id, double value)")
 
     required_param_ids = {
         "tempo",
@@ -458,8 +466,8 @@ def test_android_bridge_fallback_state_covers_core_control_events_and_parameters
     )
 
 
-# Module: JNI event payload currently downcasts double to float (risk for packed bitfield precision)
-def test_android_bridge_jni_event_path_uses_float_downcast_for_event_value_payload():
+# Module: JNI event payload should preserve jdouble precision into Engine::sendEvent
+def test_android_bridge_jni_event_path_preserves_double_payload_for_event_value():
     content = _read(BRIDGE_CPP)
     jni_event_block = _extract_block(
         content,
@@ -467,4 +475,14 @@ def test_android_bridge_jni_event_path_uses_float_downcast_for_event_value_paylo
     )
 
     assert "jdouble value" in jni_event_block
-    assert "(float) value" in jni_event_block
+    assert "(double) value" in jni_event_block
+    assert "(float) value" not in jni_event_block
+
+
+# Module: setStepPacked decoding should use integer-safe llround for packed payload
+def test_android_bridge_set_step_packed_uses_llround_for_integer_safe_unpack():
+    content = _read(BRIDGE_CPP)
+    fallback_event_block = _extract_block(content, "void applyFallbackEvent (const std::string& id, double value)")
+
+    assert 'if (id == "setStepPacked")' in fallback_event_block
+    assert "std::llround (value)" in fallback_event_block

@@ -353,20 +353,21 @@ public:
         applyFallbackParameter (id, value);
     }
 
-    void sendEvent (const std::string& id, float value)
+    void sendEvent (const std::string& id, double value)
     {
         std::lock_guard<std::mutex> lock (mutex_);
         if (processor_ != nullptr)
         {
             if (auto* p = findParam (id))
             {
+                const float v = (float) value;
                 // Rising-edge trigger for Cmajor event endpoints exported as
                 // momentary parameters.
                 p->beginChangeGesture();
-                p->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, value));
+                p->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, v));
                 p->setValueNotifyingHost (0.0f);
                 p->endChangeGesture();
-                LOGI ("Event fired: %s (val=%f)", id.c_str(), value);
+                LOGI ("Event fired: %s (val=%f)", id.c_str(), v);
                 return;
             }
 
@@ -507,7 +508,7 @@ private:
         }
     }
 
-    void applyFallbackEvent (const std::string& id, float value)
+    void applyFallbackEvent (const std::string& id, double value)
     {
         if (value == 0.0f) return;
 
@@ -541,7 +542,7 @@ private:
 
         if (id == "setStepPacked")
         {
-            const int packed = (int) std::lround (value);
+            const int packed = (int) std::llround (value);
             const int step = (packed >> 20) & 255;
             if (step >= 0 && step < 32)
             {
@@ -807,7 +808,7 @@ JNIEXPORT void JNICALL
 Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativeSendEvent
     (JNIEnv* env, jobject, jstring nameJ, jdouble value)
 {
-    g_engine.sendEvent (jstringToStd (env, nameJ), (float) value);
+    g_engine.sendEvent (jstringToStd (env, nameJ), (double) value);
 }
 
 JNIEXPORT jstring JNICALL
