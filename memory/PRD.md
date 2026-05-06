@@ -83,9 +83,15 @@
    - Updated event transport to keep `jdouble` precision end-to-end for `setStepPacked`.
    - Removed lossy float downcast; fallback decoding now uses `std::llround`.
 
+13. **Step highlight + generated-pattern UI sync + extra waveforms**
+   - Files: `.github/android-templates/android_bridge.cpp`, `.github/android-templates/MainActivity.java`, `.github/android-templates/index.html`, `view.js`
+   - Added native event queue + JNI polling (`nativePollOutputEvents`) and JS polling loop to deliver packed `stepToUI` updates into the WebView.
+   - Fallback engine now emits playback step messages and full pattern dumps for generate/clear/request-dump/setStep updates, so UI grid reflects generated melodies.
+   - Added extra waveform choices in UI: Triangle and Sine (in addition to Saw and Square).
+
 ## Validation Performed
 - Testing agent runs completed with passing checks.
-- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`, `/app/test_reports/iteration_4.json`, `/app/test_reports/iteration_5.json`, `/app/test_reports/iteration_6.json`, `/app/test_reports/iteration_7.json`, `/app/test_reports/iteration_8.json`, `/app/test_reports/iteration_9.json`, `/app/test_reports/iteration_10.json`
+- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`, `/app/test_reports/iteration_4.json`, `/app/test_reports/iteration_5.json`, `/app/test_reports/iteration_6.json`, `/app/test_reports/iteration_7.json`, `/app/test_reports/iteration_8.json`, `/app/test_reports/iteration_9.json`, `/app/test_reports/iteration_10.json`, `/app/test_reports/iteration_11.json`
 - Added test coverage artifact: `/app/backend/tests/test_android_ci_templates.py`
 - Validated:
   - bridge structure no longer broken,
@@ -102,6 +108,7 @@
   - nativeStart no longer depends on crash-prone JUCE bootstrap path.
   - fallback DSP path handles core controls without processor bootstrap.
   - packed step events preserve integer payload precision.
+  - step playback and generated pattern state are now wired for WebView UI updates.
 
 ## Prioritized Backlog
 - **P0**
