@@ -5,7 +5,7 @@
 
 ## Confirmed Scope from User
 - Failure location: **GitHub Actions only**
-- Evidence: C/C++ compile errors during `:app:buildCMakeDebug[arm64-v8a]`
+- Evidence: C/C++ compile errors in `android_bridge.cpp`, then Java compile error in `MainActivity.java` (`cannot find symbol engineStarted`)
 - Change scope: **workflow + Android project files**
 - Target: **both debug and release builds**
 
@@ -42,15 +42,21 @@
      - debug → `-DCMAKE_BUILD_TYPE=Debug`
      - release → `-DCMAKE_BUILD_TYPE=Release`
 
+5. **Java compile fix in activity template**
+   - File: `.github/android-templates/MainActivity.java`
+   - Removed stale undeclared variable usage: `engineStarted = true;`
+   - Keeps runtime state consistent with declared fields: `engineCreated`, `audioRunning`.
+
 ## Validation Performed
-- Testing agent run completed with passing checks.
-- Test report: `/app/test_reports/iteration_1.json`
+- Testing agent runs completed with passing checks.
+- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`
 - Added test coverage artifact: `/app/backend/tests/test_android_ci_templates.py`
 - Validated:
   - bridge structure no longer broken,
   - workflow builds debug+release,
   - both APK artifact upload steps exist,
   - gradle template has debug/release native configuration.
+  - MainActivity template has no stale `engineStarted` symbol.
 
 ## Prioritized Backlog
 - **P0**
