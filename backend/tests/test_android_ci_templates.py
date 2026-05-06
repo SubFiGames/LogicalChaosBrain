@@ -83,14 +83,57 @@ def test_android_bridge_create_and_startaudio_blocks_are_well_formed():
     assert start_block.count("{") == start_block.count("}")
 
 
-# Module: workflow Gradle build steps for debug + release
-def test_workflow_builds_both_debug_and_release_apks():
+# Module: workflow must sanitize generated CMakeLists linker/LTO settings on runner
+def test_workflow_sanitizes_generated_cmakelists_linker_flags_and_lto():
+    content = _read(WORKFLOW_YML)
+
+    assert "txt.replace(\"-fuse-ld=gold\", \"-fuse-ld=lld\")" in content
+    assert "patched = patched.replace(\"-flto=thin\", \"\")" in content
+    assert (
+        "patched = patched.replace(\"INTERPROCEDURAL_OPTIMIZATION TRUE\","
+        in content
+    )
+    assert "Applied linker/LTO sanitization to generated CMakeLists.txt" in content
+
+
+# Module: workflow build order should prioritize debug and keep release best-effort
+def test_workflow_build_runs_debug_first_and_release_as_best_effort():
     content = _read(WORKFLOW_YML)
 
     assert "name: Build Debug and Release APKs" in content
-    assert "./gradlew assembleDebug assembleRelease" in content
-    assert "app/build/outputs/apk/debug/app-debug.apk" in content
-    assert "app/build/outputs/apk/release/app-release-unsigned.apk" in content
+    assert "set -o pipefail" in content
+    assert "./gradlew assembleDebug" in content
+    assert "./gradlew assembleRelease" in content
+    assert "set +e" in content
+    assert "RELEASE_RC=${PIPESTATUS[0]}" in content
+    assert "WARN: assembleRelease failed; continuing with debug artifact." in content
+
+    debug_idx = content.find("./gradlew assembleDebug")
+    release_idx = content.find("./gradlew assembleRelease")
+    assert debug_idx != -1 and release_idx != -1
+    assert debug_idx < release_idx, "Release build appears before debug build"
+
+
+# Module: explicit artifact guard must require debug APK only
+def test_workflow_build_guard_requires_debug_apk_release_optional():
+    content = _read(WORKFLOW_YML)
+
+    assert 'DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"' in content
+    assert 'RELEASE_APK="app/build/outputs/apk/release/app-release-unsigned.apk"' in content
+    assert 'if [ ! -f "$DEBUG_APK" ]; then' in content
+    assert 'echo "ERROR: Debug APK not found at $DEBUG_APK"' in content
+    assert "exit 1" in content
+    assert 'if [ -f "$RELEASE_APK" ]; then' in content
+    assert 'echo "WARN: Release APK not produced in this run (see gradle-build.log)."' in content
+
+
+# Module: step summary must report debug success when release APK is absent
+def test_workflow_summary_reports_debug_success_even_when_release_missing():
+    content = _read(WORKFLOW_YML)
+
+    assert 'elif [ -f "$DEBUG_APK" ]; then' in content
+    assert "**Status:** Debug build successful (release build not produced in this run)" in content
+    assert "Debug APK size: $DEBUG_SZ" in content
 
 
 # Module: workflow artifact uploads for both build variants
