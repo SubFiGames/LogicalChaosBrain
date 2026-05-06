@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <cmath>
 #include <mutex>
 #include <pthread.h>
 #include <string>
@@ -100,42 +101,34 @@ public:
     {
         std::lock_guard<std::mutex> lock (mutex_);
 
-        if (processor_ != nullptr)
+        if (isCreated_)
             return {};
 
         try
         {
-            // Force JUCE's MessageManager to exist before any code path that
-            // might touch it.  Cmajor's processor occasionally pokes JUCE
-            // internals that assume MessageManager::getInstance() is non-null.
-            (void) juce::MessageManager::getInstance();
-
-            LOGI ("Engine::create — calling createPluginFilter()");
-            processor_.reset (createPluginFilter());
-            if (processor_ == nullptr)
-                return "createPluginFilter() returned nullptr";
-
-            const int busIns  = processor_->getTotalNumInputChannels();
-            const int busOuts = processor_->getTotalNumOutputChannels();
-            LOGI ("Processor reports: inputs=%d outputs=%d latency=%d params=%d",
-                  busIns, busOuts,
-                  processor_->getLatencySamples(),
-                  processor_->getParameters().size());
-
-            for (auto* p : processor_->getParameters())
+            // Safe Android bootstrap: skip JUCE processor creation by default.
+            // This avoids startup crashes from JUCE message-thread bootstrap on
+            // devices/environments where JUCE Java helpers are incomplete.
+            useJuceProcessor_ = false;
+            if (useJuceProcessor_)
             {
-                juce::String id = p->getName (256);
-                if (auto* withID = dynamic_cast<juce::AudioProcessorParameterWithID*> (p))
-                    id = withID->paramID + " (" + p->getName (64) + ")";
-                LOGI ("  param: %s", id.toRawUTF8());
+                LOGI ("Engine::create — calling createPluginFilter()");
+                processor_.reset (createPluginFilter());
+                if (processor_ == nullptr)
+                    return "createPluginFilter() returned nullptr";
             }
 
+            const int busIns  = processor_ ? processor_->getTotalNumInputChannels() : 0;
+            const int busOuts = processor_ ? processor_->getTotalNumOutputChannels() : 2;
             numProcChannels_ = juce::jmax (2, juce::jmax (busIns, busOuts));
 
             constexpr int    kMaxBlock  = 2048;
             constexpr double kDefaultSR = 48000.0;
-            processor_->setPlayConfigDetails (busIns, busOuts, kDefaultSR, kMaxBlock);
-            processor_->prepareToPlay (kDefaultSR, kMaxBlock);
+            if (processor_)
+            {
+                processor_->setPlayConfigDetails (busIns, busOuts, kDefaultSR, kMaxBlock);
+                processor_->prepareToPlay (kDefaultSR, kMaxBlock);
+            }
             maxBlock_ = kMaxBlock;
 
             scratch_.assign ((size_t) numProcChannels_,
@@ -144,7 +137,8 @@ public:
             for (int i = 0; i < numProcChannels_; ++i)
                 chanPtrs_[(size_t) i] = scratch_[(size_t) i].data();
 
-            LOGI ("Engine ready: maxBlock=%d numProcChannels=%d", maxBlock_, numProcChannels_);
+            isCreated_ = true;
+            LOGI ("Engine ready: maxBlock=%d numProcChannels=%d processor=%s", maxBlock_, numProcChannels_, processor_ ? "on" : "off");
             return {};
         }
         catch (const std::exception& e)
@@ -165,14 +159,19 @@ public:
     {
         std::lock_guard<std::mutex> lock (mutex_);
 
-        if (processor_ == nullptr)
-            return "engine not initialised — call nativeStart first";
         if (stream_ != nullptr)
             return {}; // already running
 
+        if (processor_ == nullptr)
+        {
+            auto createErr = create();
+            if (! createErr.empty())
+                return createErr;
+        }
+
         try
         {
-            const auto sr = processor_->getSampleRate() > 0
+            const auto sr = (processor_ && processor_->getSampleRate() > 0)
                           ? processor_->getSampleRate() : 48000.0;
 
             oboe::AudioStreamBuilder b;
@@ -198,11 +197,15 @@ public:
             LOGI ("Oboe stream opened: SR=%d, framesPerBurst=%d", actualSR, framesBurst);
 
             // Re-prepare with the actual sample rate (still keep maxBlock).
-            processor_->setPlayConfigDetails (
-                processor_->getTotalNumInputChannels(),
-                processor_->getTotalNumOutputChannels(),
-                (double) actualSR, maxBlock_);
-            processor_->prepareToPlay ((double) actualSR, maxBlock_);
+            if (processor_)
+            {
+                processor_->setPlayConfigDetails (
+                    processor_->getTotalNumInputChannels(),
+                    processor_->getTotalNumOutputChannels(),
+                    (double) actualSR, maxBlock_);
+                processor_->prepareToPlay ((double) actualSR, maxBlock_);
+            }
+            sampleRate_ = (double) actualSR;
 
             r = stream_->requestStart();
             if (r != oboe::Result::OK)
@@ -300,7 +303,18 @@ public:
 
         if (processor_ == nullptr || numProcChannels_ == 0)
         {
-            std::memset (out, 0, sizeof (float) * 2 * (size_t) numFrames);
+            const float amp = 0.05f;
+            const float freq = 220.0f;
+            const double sr = sampleRate_ > 0.0 ? sampleRate_ : 48000.0;
+            for (int i = 0; i < numFrames; ++i)
+            {
+                const float v = amp * std::sin ((float) phase_ * 6.28318530718f);
+                phase_ += freq / sr;
+                if (phase_ >= 1.0)
+                    phase_ -= 1.0;
+                out[2 * i] = v;
+                out[2 * i + 1] = v;
+            }
             return oboe::DataCallbackResult::Continue;
         }
 
@@ -376,6 +390,10 @@ private:
     std::vector<float*>                   chanPtrs_;
     int                                   numProcChannels_ = 0;
     int                                   maxBlock_        = 0;
+    bool                                  isCreated_       = false;
+    bool                                  useJuceProcessor_= false;
+    double                                sampleRate_      = 48000.0;
+    double                                phase_           = 0.0;
 };
 
 static Engine g_engine;
