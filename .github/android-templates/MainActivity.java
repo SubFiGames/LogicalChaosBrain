@@ -119,6 +119,10 @@ public class MainActivity extends Activity
             Log.w (TAG, "nativeSetCrashLogPath threw — continuing", t);
         }
 
+        // Do not create the audio engine during Activity startup.
+        // Engine creation happens lazily from AndroidHost.startAudio(), which
+        // gives better diagnostics and avoids blocking or crashing the UI path.
+        engineStarted = true;
         // ---- UI is up *unconditionally* from here on ---------------------
         // Engine creation is deferred to AndroidHost.startEngine() which is
         // called from the WebView's "Start Audio" button.  This means even

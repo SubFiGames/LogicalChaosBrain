@@ -197,6 +197,7 @@ async function loadViewModule () {
 
 (async function mount () {
   try {
+    const create = window.createPatchView;
     const mod = await loadViewModule();
     const create = mod.default || mod.createPatchView;
     if (typeof create !== 'function') {
