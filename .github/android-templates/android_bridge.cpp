@@ -164,9 +164,6 @@ public:
         std::lock_guard<std::mutex> lock (mutex_);
 
         if (isCreated_)
-        if (processor_ != nullptr)
-        {
-            progress ("create(): processor already exists, no-op");
             return {};
         }
 
@@ -177,29 +174,6 @@ public:
             // devices/environments where JUCE Java helpers are incomplete.
             useJuceProcessor_ = false;
             if (useJuceProcessor_)
-            progress ("create(): step 1 — about to touch juce::MessageManager");
-            // Force JUCE's MessageManager to exist before any code path that
-            // might touch it.  Cmajor's processor occasionally pokes JUCE
-            // internals that assume MessageManager::getInstance() is non-null.
-            (void) juce::MessageManager::getInstance();
-            progress ("create(): step 2 — MessageManager ok");
-
-            progress ("create(): step 3 — calling createPluginFilter()");
-            processor_.reset (createPluginFilter());
-            progress ("create(): step 4 — createPluginFilter returned %p",
-                      (void*) processor_.get());
-
-            if (processor_ == nullptr)
-                return "createPluginFilter() returned nullptr";
-
-            const int busIns  = processor_->getTotalNumInputChannels();
-            const int busOuts = processor_->getTotalNumOutputChannels();
-            progress ("create(): step 5 — inputs=%d outputs=%d latency=%d params=%d",
-                      busIns, busOuts,
-                      processor_->getLatencySamples(),
-                      processor_->getParameters().size());
-
-            for (auto* p : processor_->getParameters())
             {
                 LOGI ("Engine::create — calling createPluginFilter()");
                 processor_.reset (createPluginFilter());
@@ -218,14 +192,6 @@ public:
                 processor_->setPlayConfigDetails (busIns, busOuts, kDefaultSR, kMaxBlock);
                 processor_->prepareToPlay (kDefaultSR, kMaxBlock);
             }
-            progress ("create(): step 6 — setPlayConfigDetails(%d,%d,%g,%d)",
-                      busIns, busOuts, kDefaultSR, kMaxBlock);
-            processor_->setPlayConfigDetails (busIns, busOuts, kDefaultSR, kMaxBlock);
-
-            progress ("create(): step 7 — prepareToPlay");
-            processor_->prepareToPlay (kDefaultSR, kMaxBlock);
-            progress ("create(): step 8 — prepareToPlay returned ok");
-
             maxBlock_ = kMaxBlock;
 
             scratch_.assign ((size_t) numProcChannels_,
@@ -236,8 +202,6 @@ public:
 
             isCreated_ = true;
             LOGI ("Engine ready: maxBlock=%d numProcChannels=%d processor=%s", maxBlock_, numProcChannels_, processor_ ? "on" : "off");
-            progress ("create(): step 9 — engine ready (maxBlock=%d, channels=%d)",
-                      maxBlock_, numProcChannels_);
             return {};
         }
         catch (const std::exception& e)
@@ -264,6 +228,13 @@ public:
         {
             progress ("startAudio(): already running, no-op");
             return {}; // already running
+        }
+
+        if (processor_ == nullptr)
+        {
+            auto createErr = create();
+            if (! createErr.empty())
+                return createErr;
         }
 
         if (processor_ == nullptr)
@@ -328,13 +299,6 @@ public:
                 processor_->prepareToPlay ((double) actualSR, maxBlock_);
             }
             sampleRate_ = (double) actualSR;
-            progress ("startAudio(): step 3 — re-prepareToPlay at actual SR=%d", actualSR);
-            processor_->setPlayConfigDetails (
-                processor_->getTotalNumInputChannels(),
-                processor_->getTotalNumOutputChannels(),
-                (double) actualSR, maxBlock_);
-            processor_->prepareToPlay ((double) actualSR, maxBlock_);
-            progress ("startAudio(): step 4 — prepareToPlay returned ok");
 
             r = stream_->requestStart();
             if (r != oboe::Result::OK)

@@ -123,11 +123,6 @@ public class MainActivity extends Activity
         // Engine creation happens lazily from AndroidHost.startAudio(), which
         // gives better diagnostics and avoids blocking or crashing the UI path.
         engineStarted = true;
-        // ---- UI is up *unconditionally* from here on ---------------------
-        // Engine creation is deferred to AndroidHost.startEngine() which is
-        // called from the WebView's "Start Audio" button.  This means even
-        // if the engine init segfaults, the user has already seen the UI
-        // (and on next launch sees a useful crash report).
         setContentView (buildWebViewLayout());
     }
 

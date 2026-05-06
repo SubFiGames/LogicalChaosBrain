@@ -198,8 +198,6 @@ async function loadViewModule () {
 (async function mount () {
   try {
     const create = window.createPatchView;
-    const mod = await loadViewModule();
-    const create = mod.default || mod.createPatchView;
     if (typeof create !== 'function') {
       document.getElementById ('root').textContent =
         'createPatchView() not found. Inline view.js injection failed.';
@@ -217,6 +215,9 @@ async function loadViewModule () {
       + '</div>';
   }
 })();})();
+</script>
+<script>
+/*__INLINE_VIEW_JS__*/
 </script>
 <script>
 /*__INLINE_VIEW_JS__*/
