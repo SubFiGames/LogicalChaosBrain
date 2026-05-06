@@ -18,8 +18,7 @@ android {
             cmake {
                 cppFlags "-std=c++17 -frtti -fexceptions"
                 arguments "-DANDROID_STL=c++_shared",
-                          "-DANDROID_PLATFORM=android-24",
-                          "-DCMAKE_BUILD_TYPE=Debug"
+                          "-DANDROID_PLATFORM=android-24"
             }
         }
 
@@ -29,10 +28,22 @@ android {
     }
 
     buildTypes {
-        debug   { debuggable true }
+        debug {
+            debuggable true
+            externalNativeBuild {
+                cmake {
+                    arguments "-DCMAKE_BUILD_TYPE=Debug"
+                }
+            }
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            externalNativeBuild {
+                cmake {
+                    arguments "-DCMAKE_BUILD_TYPE=Release"
+                }
+            }
         }
     }
 

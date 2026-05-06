@@ -308,9 +308,9 @@ jobs:
           chmod +x gradlew
 
       # ------------------------------------------------------------------ #
-      # 13. Build APK
+      # 13. Build APKs (debug + release)
       # ------------------------------------------------------------------ #
-      - name: Build APK with Gradle
+      - name: Build Debug and Release APKs
         run: |
           cd AndroidProject
 
@@ -320,20 +320,30 @@ jobs:
           # appeared green.
           set -o pipefail
 
-          ./gradlew assembleDebug \
+          ./gradlew assembleDebug assembleRelease \
             --stacktrace \
             --no-daemon \
             2>&1 | tee ../gradle-build.log
 
-          # Explicit guard: fail loudly if the APK file is absent.
-          if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
-            echo "APK built successfully!"
-            ls -lh app/build/outputs/apk/debug/
-          else
-            echo "ERROR: APK not found at expected path after build."
+          # Explicit guards: fail loudly if expected artifacts are absent.
+          DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
+          RELEASE_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
+
+          if [ ! -f "$DEBUG_APK" ]; then
+            echo "ERROR: Debug APK not found at $DEBUG_APK"
             echo "Check the gradle-build.log artifact for the real failure."
             exit 1
           fi
+
+          if [ ! -f "$RELEASE_APK" ]; then
+            echo "ERROR: Release APK not found at $RELEASE_APK"
+            echo "Check the gradle-build.log artifact for the real failure."
+            exit 1
+          fi
+
+          echo "Debug + release APKs built successfully"
+          ls -lh app/build/outputs/apk/debug/
+          ls -lh app/build/outputs/apk/release/
 
       - name: Find APK files
         if: always()
@@ -344,12 +354,20 @@ jobs:
       # ------------------------------------------------------------------ #
       # 13. Upload artifacts
       # ------------------------------------------------------------------ #
-      - name: Upload APK Artifact
+      - name: Upload Debug APK Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APP_NAME }}-Android-Debug-APK
           path: AndroidProject/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+
+      - name: Upload Release APK Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-Android-Release-APK
+          path: AndroidProject/app/build/outputs/apk/release/*.apk
           if-no-files-found: warn
 
       - name: Upload Build Logs
@@ -378,12 +396,16 @@ jobs:
             echo "| Commit | \`${{ github.sha }}\` |"
             echo "| Date | $(date -u) |"
             echo ""
-            if [ -f "AndroidProject/app/build/outputs/apk/debug/app-debug.apk" ]; then
-              SZ=$(du -h "AndroidProject/app/build/outputs/apk/debug/app-debug.apk" | cut -f1)
+            DEBUG_APK="AndroidProject/app/build/outputs/apk/debug/app-debug.apk"
+            RELEASE_APK="AndroidProject/app/build/outputs/apk/release/app-release-unsigned.apk"
+            if [ -f "$DEBUG_APK" ] && [ -f "$RELEASE_APK" ]; then
+              DEBUG_SZ=$(du -h "$DEBUG_APK" | cut -f1)
+              RELEASE_SZ=$(du -h "$RELEASE_APK" | cut -f1)
               echo "**Status:** Build Successful"
               echo ""
-              echo "APK size: $SZ"
+              echo "Debug APK size: $DEBUG_SZ"
+              echo "Release APK size: $RELEASE_SZ"
             else
-              echo "**Status:** APK not found — check build-logs artifact"
+              echo "**Status:** One or more APK outputs missing — check build-logs artifact"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

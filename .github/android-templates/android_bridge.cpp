@@ -165,7 +165,6 @@ public:
 
         if (isCreated_)
             return {};
-        }
 
         try
         {
@@ -230,33 +229,8 @@ public:
             return {}; // already running
         }
 
-        if (processor_ == nullptr)
-        {
-            auto createErr = create();
-            if (! createErr.empty())
-                return createErr;
-        }
-
-        if (processor_ == nullptr)
-        {
-            auto createErr = create();
-            if (! createErr.empty())
-                return createErr;
-        }
-
-        if (processor_ == nullptr)
-        {
-            auto createErr = create();
-            if (! createErr.empty())
-                return createErr;
-        }
-
-        if (processor_ == nullptr)
-        {
-            auto createErr = create();
-            if (! createErr.empty())
-                return createErr;
-        }
+        if (! isCreated_)
+            return "Engine not created. Call nativeStart first.";
 
         try
         {
