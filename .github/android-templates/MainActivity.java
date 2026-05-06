@@ -62,11 +62,15 @@ public class MainActivity extends Activity
         "LogicalChaosMelodyMachine_Standalone",
     };
 
-    private String  loadedLib       = null;
-    private String  loadError       = null;
-    private boolean engineCreated   = false;
-    private boolean audioRunning    = false;
-    private WebView webView         = null;
+    private String  loadedLib    = null;
+    private String  loadError    = null;
+    private String  startError   = null;
+    private boolean engineStarted = false;
+    // Back-compat alias for older conflict-resolved variants
+    private boolean engineCreated = false;
+    // Back-compat alias for conflict variants that manage audio state in Java
+    private boolean audioRunning = false;
+    private WebView webView      = null;
 
     // --- Native methods (android_bridge.cpp) --------------------------------
     private native void   nativeSetCrashLogPath (String crashPath, String progressPath);
@@ -123,18 +127,15 @@ public class MainActivity extends Activity
         // Engine creation happens lazily from AndroidHost.startAudio(), which
         // gives better diagnostics and avoids blocking or crashing the UI path.
         engineStarted = true;
+        engineCreated = true;
         setContentView (buildWebViewLayout());
     }
 
     @Override
     protected void onDestroy()
     {
-        try
-        {
-            if (audioRunning)  nativeStopAudio();
-            if (engineCreated) nativeStop();
-        }
-        catch (Throwable t) { Log.e (TAG, "engine teardown failed", t); }
+        try { if (engineStarted || engineCreated) nativeStop(); }
+        catch (Throwable t) { Log.e (TAG, "nativeStop failed", t); }
         super.onDestroy();
     }
 
@@ -347,9 +348,7 @@ public class MainActivity extends Activity
         @JavascriptInterface
         public String getNativeStatus()
         {
-            return "lib=" + loadedLib
-                 + "; engine=" + (engineCreated ? "ready" : "not-created")
-                 + "; audio="  + (audioRunning  ? "running" : "stopped");
+            return "lib=" + loadedLib + "; started=" + (engineStarted || engineCreated);
         }
 
         // Combined "create + start" used by the WebView's Start Audio button.
@@ -389,10 +388,7 @@ public class MainActivity extends Activity
         @JavascriptInterface
         public void stopAudio()
         {
-            try
-            {
-                if (audioRunning) { nativeStopAudio(); audioRunning = false; }
-            }
+            try { nativeStopAudio(); audioRunning = false; }
             catch (Throwable t) { Log.e (TAG, "stopAudio failed", t); }
         }
 
