@@ -27,22 +27,26 @@ import java.nio.charset.StandardCharsets;
 /**
  * Android entry point for Logical Chaos Melody Machine.
  *
- * Design goals (the app-crashes-silently problem)
- * -----------------------------------------------
- * The user testing this APK doesn't have adb access, so whenever the app
- * dies we need to display the reason on the next launch.  We do this with
- * two layers:
+ * Launch sequence (May 2026 rewrite — UI-first)
+ * --------------------------------------------
+ * Earlier versions tried to construct the JUCE/Cmajor audio engine inside
+ * onCreate().  When the engine crashed, the user never saw the UI and the
+ * app appeared to "open and immediately error out".  The new flow:
  *
- *   1. A Thread.UncaughtExceptionHandler that writes any Java stack trace
- *      (including the UnsatisfiedLinkError / RuntimeException from a failed
- *      native init) to {@code getFilesDir()/last-crash.log}.
- *   2. A native-side signal handler (installed by the JNI bridge once we
- *      pass it the crash-file path) that catches SIGSEGV / SIGABRT etc.
- *      and records a short description into {@code native-crash.log} before
- *      letting Android produce its normal tombstone.
+ *   onCreate()
+ *     -> install Java + native crash handlers
+ *     -> show previous-launch crash file (if any) and stop
+ *     -> System.loadLibrary  (just the native shared object, no engine)
+ *     -> setContentView(WebView)             <-- UI is up here, always
  *
- * On every subsequent launch, if either file exists we show it on-screen
- * and delete it.  Nothing is silent.
+ *   user taps "Start Audio" in the WebView
+ *     -> AndroidHost.startEngine()
+ *          -> nativeStart()       (create JUCE plugin + prepareToPlay)
+ *          -> nativeStartAudio()  (open Oboe stream)
+ *
+ * Even if the engine init crashes, the WebView is already on screen and the
+ * crash details are captured in last-crash.log + native-crash.log + the
+ * progress.log checkpoint trail (see android_bridge.cpp).
  */
 public class MainActivity extends Activity
 {
@@ -50,6 +54,7 @@ public class MainActivity extends Activity
 
     private static final String JAVA_CRASH_FILE   = "last-crash.log";
     private static final String NATIVE_CRASH_FILE = "native-crash.log";
+    private static final String PROGRESS_FILE     = "progress.log";
 
     // Candidate shared-library names we might find in lib/.
     private static final String[] CANDIDATE_LIBS = {
@@ -68,13 +73,14 @@ public class MainActivity extends Activity
     private WebView webView      = null;
 
     // --- Native methods (android_bridge.cpp) --------------------------------
-    private native void   nativeSetCrashLogPath (String path);
+    private native void   nativeSetCrashLogPath (String crashPath, String progressPath);
     private native String nativeStart();                         // create engine
     private native String nativeStartAudio();                    // open Oboe + start
     private native void   nativeStopAudio();
     private native void   nativeStop();                          // destroy engine
     private native void   nativeSendEvent       (String endpointID, double value);
     private native void   nativeSendParameter   (String endpointID, float  value);
+    private native String nativeReadProgressLog();
 
     //------------------------------------------------------------------------
     @Override
@@ -93,6 +99,8 @@ public class MainActivity extends Activity
             return;
         }
 
+        // Always try to load the .so so we can wire the WebView bridge.
+        // If loading fails we still show a useful error layout.
         if (! tryLoadNativeLibrary())
         {
             setContentView (buildScrollableStatusLayout (
@@ -100,13 +108,15 @@ public class MainActivity extends Activity
             return;
         }
 
-        // Tell native where to write crash reports.  Must happen before
-        // any other native call so the signal handlers are armed.
+        // Tell native where to write crash + progress reports.  Must happen
+        // before any other native call so the signal handlers are armed.
         try
         {
             File dir = getFilesDir();
             File nativeCrash = new File (dir, NATIVE_CRASH_FILE);
-            nativeSetCrashLogPath (nativeCrash.getAbsolutePath());
+            File progress    = new File (dir, PROGRESS_FILE);
+            nativeSetCrashLogPath (nativeCrash.getAbsolutePath(),
+                                   progress.getAbsolutePath());
         }
         catch (Throwable t)
         {
@@ -322,6 +332,7 @@ public class MainActivity extends Activity
         @JavascriptInterface
         public void sendEvent (String endpointID, double value)
         {
+            if (! engineCreated) return;
             try { nativeSendEvent (endpointID, value); }
             catch (Throwable t) { Log.e (TAG, "sendEvent failed", t); }
         }
@@ -329,6 +340,7 @@ public class MainActivity extends Activity
         @JavascriptInterface
         public void sendParameter (String endpointID, float value)
         {
+            if (! engineCreated) return;
             try { nativeSendParameter (endpointID, value); }
             catch (Throwable t) { Log.e (TAG, "sendParameter failed", t); }
         }
@@ -339,20 +351,52 @@ public class MainActivity extends Activity
             return "lib=" + loadedLib + "; started=" + (engineStarted || engineCreated);
         }
 
-        // Called by the WebView UI to start/stop audio.  Returns "" on success
-        // or an error string the JS can display.
+        // Combined "create + start" used by the WebView's Start Audio button.
+        // Returns "" on success or an error string the JS can show.
         @JavascriptInterface
-        public String startAudio()
+        public String startEngine()
         {
-            try { return nativeStartAudio(); }
-            catch (Throwable t) { return stackTraceString (t); }
+            try
+            {
+                if (! engineCreated)
+                {
+                    String err = nativeStart();
+                    if (err != null && ! err.isEmpty())
+                        return "create: " + err;
+                    engineCreated = true;
+                }
+
+                if (! audioRunning)
+                {
+                    String err = nativeStartAudio();
+                    if (err != null && ! err.isEmpty())
+                        return "audio: " + err;
+                    audioRunning = true;
+                }
+                return "";
+            }
+            catch (Throwable t)
+            {
+                return stackTraceString (t);
+            }
         }
+
+        // Backwards-compatible alias used by older index.html builds.
+        @JavascriptInterface
+        public String startAudio() { return startEngine(); }
 
         @JavascriptInterface
         public void stopAudio()
         {
             try { nativeStopAudio(); audioRunning = false; }
             catch (Throwable t) { Log.e (TAG, "stopAudio failed", t); }
+        }
+
+        @JavascriptInterface
+        public String readProgressLog()
+        {
+            try { return nativeReadProgressLog(); }
+            catch (Throwable t) { return "(could not read progress: " + t.getMessage() + ")"; }
         }
     }
 }

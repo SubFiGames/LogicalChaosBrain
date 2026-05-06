@@ -1,5 +1,5 @@
 //==============================================================================
-//  android_bridge.cpp  —  Oboe-driven version
+//  android_bridge.cpp  —  Oboe-driven version (with progress checkpoints)
 //  ------------------------------------------
 //  Rather than using juce::AudioDeviceManager (which on Android expects the
 //  Projucer-generated Java helper class `com.rmsl.juce.Java` to exist), we
@@ -11,13 +11,21 @@
 //  Crash safety: JNI methods write any fatal error into a file in the app's
 //  files-dir (passed in from Java) so MainActivity can display the message
 //  on next launch.  Useful when the user doesn't have adb access.
+//
+//  Progress checkpoints: every meaningful step in create()/startAudio() writes
+//  a single human-readable line to a `progress.log` file.  When the native
+//  signal handler fires, the contents of that file are appended to the crash
+//  log — so the post-mortem tells you EXACTLY which line died, not just
+//  "Native signal 11".
 //==============================================================================
 
 #include <jni.h>
 #include <android/log.h>
 #include <csignal>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <cmath>
 #include <mutex>
@@ -39,11 +47,53 @@
 extern juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
 
 // ---------------------------------------------------------------------------
-// Crash file: full absolute path set once via setCrashLogPath JNI call.
+// Crash + progress files: full absolute paths set once via JNI.
 // ---------------------------------------------------------------------------
 namespace
 {
     std::string g_crashLogPath;
+    std::string g_progressLogPath;
+    std::mutex  g_progressMutex;
+
+    // Writes a single line to progress.log.  Truncates after ~64 KiB so a long
+    // run can't fill the disk.  Async-signal-safe-ish: uses POSIX I/O only.
+    void progress (const char* fmt, ...)
+    {
+        std::lock_guard<std::mutex> lock (g_progressMutex);
+
+        char body[512];
+        va_list args;
+        va_start (args, fmt);
+        std::vsnprintf (body, sizeof (body), fmt, args);
+        va_end (args);
+
+        // Always log to logcat too.
+        __android_log_print (ANDROID_LOG_INFO, LOG_TAG, "[checkpoint] %s", body);
+
+        if (g_progressLogPath.empty()) return;
+
+        FILE* f = std::fopen (g_progressLogPath.c_str(), "a");
+        if (! f) return;
+
+        std::time_t t = std::time (nullptr);
+        char ts[32];
+        std::strftime (ts, sizeof (ts), "%H:%M:%S", std::localtime (&t));
+        std::fprintf (f, "[%s] %s\n", ts, body);
+        std::fclose (f);
+    }
+
+    std::string readWholeFile (const std::string& path)
+    {
+        FILE* f = std::fopen (path.c_str(), "r");
+        if (! f) return {};
+        std::string out;
+        char buf[1024];
+        size_t n;
+        while ((n = std::fread (buf, 1, sizeof (buf), f)) > 0)
+            out.append (buf, n);
+        std::fclose (f);
+        return out;
+    }
 
     void writeCrashLog (const char* headline, const char* body)
     {
@@ -51,6 +101,17 @@ namespace
         FILE* f = std::fopen (g_crashLogPath.c_str(), "w");
         if (! f) return;
         std::fprintf (f, "%s\n\n%s\n", headline ? headline : "", body ? body : "");
+
+        // Append the recent progress trail so the user knows which step died.
+        if (! g_progressLogPath.empty())
+        {
+            std::string prog = readWholeFile (g_progressLogPath);
+            if (! prog.empty())
+            {
+                std::fprintf (f, "\n--- progress.log (last checkpoints) ---\n%s",
+                              prog.c_str());
+            }
+        }
         std::fclose (f);
     }
 
@@ -63,9 +124,10 @@ namespace
         std::snprintf (buf, sizeof (buf),
                        "Native signal %d (%s)\n"
                        "tid=%d  pthread=%lx\n"
-                       "See logcat tag '%s' for the tombstone and the\n"
-                       "last LOGI line printed before the crash — that will\n"
-                       "narrow down which thread/operation segfaulted.",
+                       "See logcat tag '%s' for the tombstone.\n"
+                       "The progress.log section below shows the last\n"
+                       "checkpoint reached BEFORE the crash — the crash\n"
+                       "happened in the step AFTER that line.",
                        sig, strsignal (sig),
                        (int) gettid(),
                        (unsigned long) pthread_self(),
@@ -94,15 +156,16 @@ class Engine : public oboe::AudioStreamDataCallback,
 {
 public:
     // Step 1: create the JUCE processor and prepareToPlay.  Does NOT open
-    // any audio stream — the WebView UI loads after this, and the user
-    // explicitly starts audio with startAudio() (so if audio crashes, the
-    // UI is still visible as evidence the engine itself initialised cleanly).
+    // any audio stream — the WebView UI loads first; the user explicitly
+    // starts audio with startAudio() (so if audio crashes, the UI is still
+    // visible as evidence the engine itself initialised cleanly).
     std::string create()
     {
         std::lock_guard<std::mutex> lock (mutex_);
 
         if (isCreated_)
             return {};
+        }
 
         try
         {
@@ -143,11 +206,13 @@ public:
         }
         catch (const std::exception& e)
         {
+            progress ("create(): EXCEPTION std::exception: %s", e.what());
             processor_.reset();
             return std::string ("Engine create threw: ") + e.what();
         }
         catch (...)
         {
+            progress ("create(): EXCEPTION unknown");
             processor_.reset();
             return "Engine create threw unknown exception";
         }
@@ -160,7 +225,38 @@ public:
         std::lock_guard<std::mutex> lock (mutex_);
 
         if (stream_ != nullptr)
+        {
+            progress ("startAudio(): already running, no-op");
             return {}; // already running
+        }
+
+        if (processor_ == nullptr)
+        {
+            auto createErr = create();
+            if (! createErr.empty())
+                return createErr;
+        }
+
+        if (processor_ == nullptr)
+        {
+            auto createErr = create();
+            if (! createErr.empty())
+                return createErr;
+        }
+
+        if (processor_ == nullptr)
+        {
+            auto createErr = create();
+            if (! createErr.empty())
+                return createErr;
+        }
+
+        if (processor_ == nullptr)
+        {
+            auto createErr = create();
+            if (! createErr.empty())
+                return createErr;
+        }
 
         if (processor_ == nullptr)
         {
@@ -173,6 +269,8 @@ public:
         {
             const auto sr = (processor_ && processor_->getSampleRate() > 0)
                           ? processor_->getSampleRate() : 48000.0;
+
+            progress ("startAudio(): step 1 — building Oboe stream (target SR=%g)", sr);
 
             oboe::AudioStreamBuilder b;
             b.setDirection (oboe::Direction::Output);
@@ -188,13 +286,15 @@ public:
             if (r != oboe::Result::OK)
             {
                 std::string err = std::string ("Oboe openStream failed: ") + oboe::convertToText (r);
+                progress ("startAudio(): %s", err.c_str());
                 LOGE ("%s", err.c_str());
                 return err;
             }
 
             const auto actualSR    = stream_->getSampleRate();
             const auto framesBurst = stream_->getFramesPerBurst();
-            LOGI ("Oboe stream opened: SR=%d, framesPerBurst=%d", actualSR, framesBurst);
+            progress ("startAudio(): step 2 — Oboe opened SR=%d framesPerBurst=%d",
+                      actualSR, framesBurst);
 
             // Re-prepare with the actual sample rate (still keep maxBlock).
             if (processor_)
@@ -211,22 +311,25 @@ public:
             if (r != oboe::Result::OK)
             {
                 std::string err = std::string ("Oboe requestStart failed: ") + oboe::convertToText (r);
+                progress ("startAudio(): %s", err.c_str());
                 LOGE ("%s", err.c_str());
                 stream_->close();
                 stream_.reset();
                 return err;
             }
 
-            LOGI ("Audio stream started.");
+            progress ("startAudio(): step 5 — audio stream started.");
             return {};
         }
         catch (const std::exception& e)
         {
+            progress ("startAudio(): EXCEPTION std::exception: %s", e.what());
             if (stream_) { stream_->close(); stream_.reset(); }
             return std::string ("startAudio threw: ") + e.what();
         }
         catch (...)
         {
+            progress ("startAudio(): EXCEPTION unknown");
             if (stream_) { stream_->close(); stream_.reset(); }
             return "startAudio threw unknown exception";
         }
@@ -240,7 +343,7 @@ public:
             stream_->requestStop();
             stream_->close();
             stream_.reset();
-            LOGI ("Audio stream stopped.");
+            progress ("stopAudio(): audio stream stopped.");
         }
     }
 
@@ -258,7 +361,7 @@ public:
             processor_->releaseResources();
             processor_.reset();
         }
-        LOGI ("Engine destroyed.");
+        progress ("destroy(): engine destroyed.");
     }
 
     void sendParameter (const std::string& id, float value)
@@ -417,11 +520,20 @@ extern "C" {
 
 JNIEXPORT void JNICALL
 Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativeSetCrashLogPath
-    (JNIEnv* env, jobject, jstring pathJ)
+    (JNIEnv* env, jobject, jstring crashPathJ, jstring progressPathJ)
 {
-    g_crashLogPath = jstringToStd (env, pathJ);
+    g_crashLogPath    = jstringToStd (env, crashPathJ);
+    g_progressLogPath = jstringToStd (env, progressPathJ);
+
+    // Truncate the progress log on every cold start.
+    if (! g_progressLogPath.empty())
+    {
+        FILE* f = std::fopen (g_progressLogPath.c_str(), "w");
+        if (f) std::fclose (f);
+    }
     installSignalHandlers();
-    LOGI ("Crash log path: %s", g_crashLogPath.c_str());
+    progress ("nativeSetCrashLogPath: handlers installed (crash=%s, progress=%s)",
+              g_crashLogPath.c_str(), g_progressLogPath.c_str());
 }
 
 JNIEXPORT jstring JNICALL
@@ -430,7 +542,9 @@ Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativeStart
 {
     try
     {
+        progress ("nativeStart: entering");
         auto err = g_engine.create();
+        progress ("nativeStart: returned err=\"%s\"", err.c_str());
         return env->NewStringUTF (err.c_str());
     }
     catch (const std::exception& e)
@@ -451,7 +565,9 @@ Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativeStartAudio
 {
     try
     {
+        progress ("nativeStartAudio: entering");
         auto err = g_engine.startAudio();
+        progress ("nativeStartAudio: returned err=\"%s\"", err.c_str());
         return env->NewStringUTF (err.c_str());
     }
     catch (const std::exception& e) { return env->NewStringUTF (e.what()); }
@@ -482,6 +598,14 @@ Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativeSendEvent
     (JNIEnv* env, jobject, jstring nameJ, jdouble value)
 {
     g_engine.sendEvent (jstringToStd (env, nameJ), (float) value);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_subfigames_logicalchaos_melodymachine_MainActivity_nativeReadProgressLog
+    (JNIEnv* env, jobject)
+{
+    std::string s = readWholeFile (g_progressLogPath);
+    return env->NewStringUTF (s.c_str());
 }
 
 } // extern "C"
