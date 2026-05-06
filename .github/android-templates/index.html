@@ -113,6 +113,10 @@
 (function () {
   const host = window.AndroidHost || {};
   const listeners = new Map();  // endpointID -> [fn, ...]
+  const eventEndpoints = new Set ([
+    'generate', 'play', 'stop',
+    'setStepPacked', 'requestPatternDump', 'clearPattern'
+  ]);
 
   function notifyListeners (endpointID, value) {
     const arr = listeners.get (endpointID);
@@ -122,8 +126,22 @@
   const connection = {
     // Outgoing --------------------------------------------------------------
     sendEventOrValue (endpointID, value) {
+      const id = String (endpointID);
       const v = typeof value === 'number' ? value : (value ? 1 : 0);
-      try { host.sendEvent (String (endpointID), v); } catch (e) { console.warn (e); }
+      try {
+        if (eventEndpoints.has (id)) {
+          if (host.sendEvent) host.sendEvent (id, v);
+          return;
+        }
+
+        if (host.sendParameter) {
+          host.sendParameter (id, v);
+          return;
+        }
+
+        // Fallback for older bridges.
+        if (host.sendEvent) host.sendEvent (id, v);
+      } catch (e) { console.warn (e); }
     },
     sendParameterGestureStart (id) { /* no-op on mobile */ },
     sendParameterGestureEnd   (id) { /* no-op on mobile */ },

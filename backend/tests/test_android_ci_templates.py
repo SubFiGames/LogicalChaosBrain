@@ -14,6 +14,7 @@ CMAKE_ANDROID_JNI_APPEND = REPO_ROOT / ".github/android-templates/cmake-android-
 MAIN_ACTIVITY_JAVA = REPO_ROOT / ".github/android-templates/MainActivity.java"
 INDEX_HTML = REPO_ROOT / ".github/android-templates/index.html"
 VIEW_JS = REPO_ROOT / "view.js"
+MAIN_CMAJOR = REPO_ROOT / "Main.cmajor"
 
 
 def _read(path: Path) -> str:
@@ -66,6 +67,20 @@ def _assert_js_syntax_valid(js_source: str, label: str) -> None:
 
 def _extract_inline_scripts(html: str) -> list[str]:
     return re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL)
+
+
+def _extract_js_set_items(content: str, set_name: str) -> list[str]:
+    pattern = re.compile(rf"{re.escape(set_name)}\s*=\s*new\s+Set\s*\(\s*\[(.*?)\]\s*\)", re.DOTALL)
+    match = pattern.search(content)
+    assert match, f"Set declaration not found: {set_name}"
+    raw = match.group(1)
+    return re.findall(r"'([^']+)'", raw)
+
+
+def _extract_cmajor_inputs(cmajor_source: str, kind: str) -> set[str]:
+    # kind is either "value" or "event"
+    pattern = re.compile(rf"\binput\s+{kind}\s+\w+\s+(\w+)\b")
+    return set(pattern.findall(cmajor_source))
 
 
 # Module: native bridge C++ structural checks around create/startAudio
@@ -308,3 +323,59 @@ def test_workflow_inlined_output_executes_mount_after_create_patch_view_definiti
     assert inline_script_idx is not None, "Transformed inline createPatchView definition not found"
     assert mount_trigger_idx is not None, "Mount trigger script not found"
     assert mount_trigger_idx > inline_script_idx, "Mount trigger executes before createPatchView definition"
+
+
+# Module: native bridge must run in functional JUCE processor mode (not forced fallback)
+def test_android_bridge_create_enables_juce_processor_functional_mode():
+    content = _read(BRIDGE_CPP)
+    create_block = _extract_block(content, "std::string create()")
+
+    assert "useJuceProcessor_ = true;" in create_block
+    assert "processor_.reset (createPluginFilter());" in create_block
+    assert "if (processor_ == nullptr)" in create_block
+
+
+# Module: native parameter bridge must convert raw value using JUCE normalize helper
+def test_android_bridge_send_parameter_uses_convert_to_0to1_before_host_notify():
+    content = _read(BRIDGE_CPP)
+    send_param_block = _extract_block(content, "void sendParameter (const std::string& id, float value)")
+
+    assert "p->convertTo0to1 (value)" in send_param_block
+    assert "const float normalised" in send_param_block
+    assert "p->setValueNotifyingHost (normalised);" in send_param_block
+
+
+# Module: JS bridge should route event endpoints to sendEvent and others to sendParameter
+def test_index_bridge_routes_event_and_value_endpoints_to_correct_native_methods():
+    content = _read(INDEX_HTML)
+    script_blocks = _extract_inline_scripts(content)
+    bridge_script = next((s for s in script_blocks if "sendEventOrValue" in s and "eventEndpoints" in s), None)
+    assert bridge_script is not None, "Bridge script with sendEventOrValue not found"
+
+    assert "if (eventEndpoints.has (id))" in bridge_script
+    assert "if (host.sendEvent) host.sendEvent (id, v);" in bridge_script
+    assert "if (host.sendParameter)" in bridge_script
+    assert "host.sendParameter (id, v);" in bridge_script
+
+
+# Module: endpoint routing set must align with Main.cmajor endpoint kinds
+def test_index_event_endpoint_set_matches_cmajor_event_definitions_and_excludes_values():
+    index_content = _read(INDEX_HTML)
+    cmajor_content = _read(MAIN_CMAJOR)
+
+    event_endpoints = set(_extract_js_set_items(index_content, "eventEndpoints"))
+    cmajor_events = _extract_cmajor_inputs(cmajor_content, "event")
+    cmajor_values = _extract_cmajor_inputs(cmajor_content, "value")
+
+    expected_events = {
+        "generate",
+        "play",
+        "stop",
+        "setStepPacked",
+        "requestPatternDump",
+        "clearPattern",
+    }
+    assert event_endpoints == expected_events
+
+    assert expected_events.issubset(cmajor_events)
+    assert event_endpoints.isdisjoint(cmajor_values)

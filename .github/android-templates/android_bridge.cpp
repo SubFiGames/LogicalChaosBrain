@@ -168,10 +168,9 @@ public:
 
         try
         {
-            // Safe Android bootstrap: skip JUCE processor creation by default.
-            // This avoids startup crashes from JUCE message-thread bootstrap on
-            // devices/environments where JUCE Java helpers are incomplete.
-            useJuceProcessor_ = false;
+            // Functional mode: create the JUCE/Cmajor processor so UI controls
+            // can drive real parameters/events instead of the sine fallback.
+            useJuceProcessor_ = true;
             if (useJuceProcessor_)
             {
                 LOGI ("Engine::create — calling createPluginFilter()");
@@ -336,8 +335,12 @@ public:
         std::lock_guard<std::mutex> lock (mutex_);
         if (auto* p = findParam (id))
         {
-            p->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, value));
-            LOGI ("Param set: %s = %f", id.c_str(), value);
+            // JS sends real-world values (e.g., tempo=120). JUCE expects 0..1.
+            const float normalised = juce::jlimit (0.0f, 1.0f, p->convertTo0to1 (value));
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (normalised);
+            p->endChangeGesture();
+            LOGI ("Param set: %s raw=%f norm=%f", id.c_str(), value, normalised);
         }
         else
         {
