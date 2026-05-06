@@ -57,9 +57,14 @@
    - Changed immediate mount IIFE to deferred function: `window.mountPatchView = async function ...`.
    - Added explicit post-inline trigger script to call `window.mountPatchView()` only after inlined `view.js` executes.
 
+8. **Release linker/LTO fix for GitHub runner**
+   - Files: `.github/android-templates/app-build.gradle`, `.github/android-templates/cmake-android-jni-append.cmake`
+   - Forced Android linker to lld: `-DANDROID_LD=lld`.
+   - Disabled IPO/LTO at CMake config + target levels to avoid `ld.gold`/`LLVMgold.so` release-link failures.
+
 ## Validation Performed
 - Testing agent runs completed with passing checks.
-- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`, `/app/test_reports/iteration_4.json`
+- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`, `/app/test_reports/iteration_4.json`, `/app/test_reports/iteration_5.json`
 - Added test coverage artifact: `/app/backend/tests/test_android_ci_templates.py`
 - Validated:
   - bridge structure no longer broken,
@@ -69,6 +74,7 @@
   - MainActivity template has no stale `engineStarted` symbol.
   - index.html + workflow-style inlined output script blocks parse successfully.
   - mount trigger now runs after inline `createPatchView` definition.
+  - release template now enforces lld + IPO/LTO-off safeguards.
 
 ## Prioritized Backlog
 - **P0**
