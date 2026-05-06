@@ -10,6 +10,7 @@ REPO_ROOT = Path("/app")
 BRIDGE_CPP = REPO_ROOT / ".github/android-templates/android_bridge.cpp"
 WORKFLOW_YML = REPO_ROOT / ".github/workflows/build-android.yml"
 APP_BUILD_GRADLE = REPO_ROOT / ".github/android-templates/app-build.gradle"
+CMAKE_ANDROID_JNI_APPEND = REPO_ROOT / ".github/android-templates/cmake-android-jni-append.cmake"
 MAIN_ACTIVITY_JAVA = REPO_ROOT / ".github/android-templates/MainActivity.java"
 INDEX_HTML = REPO_ROOT / ".github/android-templates/index.html"
 VIEW_JS = REPO_ROOT / "view.js"
@@ -111,6 +112,33 @@ def test_gradle_template_defines_debug_and_release_native_build_types():
     assert "release {" in content
     assert "-DCMAKE_BUILD_TYPE=Debug" in content
     assert "-DCMAKE_BUILD_TYPE=Release" in content
+
+
+# Module: Gradle template must force lld and disable IPO/LTO in native CMake args
+def test_gradle_template_forces_lld_and_disables_interprocedural_optimization_across_variants():
+    content = _read(APP_BUILD_GRADLE)
+
+    assert "-DANDROID_LD=lld" in content
+    assert content.count("-DANDROID_LD=lld") >= 3
+    assert "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF" in content
+    assert content.count("-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF") >= 3
+
+
+# Module: CMake append template must disable target IPO and force lld linker
+def test_cmake_android_jni_append_disables_target_ipo_and_sets_lld_link_option():
+    content = _read(CMAKE_ANDROID_JNI_APPEND)
+
+    assert "set_property(TARGET ${_cand} PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)" in content
+    assert "target_link_options(${_cand} PRIVATE -fuse-ld=lld)" in content
+
+
+# Module: workflow must append the cmake Android JNI template into generated CMakeLists
+def test_workflow_appends_android_jni_cmake_template():
+    content = _read(WORKFLOW_YML)
+
+    assert "Patch CMakeLists.txt to include Android JNI bridge" in content
+    assert "TPL=\".github/android-templates/cmake-android-jni-append.cmake\"" in content
+    assert "sed \"s/@JUCE_TARGET@/${JUCE_TARGET}/g\" \"$TPL\" >> \"$CMK\"" in content
 
 
 # Module: MainActivity symbol regression for stale engineStarted reference

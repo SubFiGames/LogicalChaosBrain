@@ -13,6 +13,8 @@ if(ANDROID)
         if(TARGET ${_cand})
             target_sources(${_cand} PRIVATE
                 "${CMAKE_CURRENT_SOURCE_DIR}/android_bridge.cpp")
+            set_property(TARGET ${_cand} PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+            target_link_options(${_cand} PRIVATE -fuse-ld=lld)
             target_link_libraries(${_cand} PRIVATE log android)
             message(STATUS "Android JNI bridge attached to target: ${_cand}")
             set(_JNI_ATTACHED TRUE)
