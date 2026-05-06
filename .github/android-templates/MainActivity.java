@@ -122,7 +122,6 @@ public class MainActivity extends Activity
         // Do not create the audio engine during Activity startup.
         // Engine creation happens lazily from AndroidHost.startAudio(), which
         // gives better diagnostics and avoids blocking or crashing the UI path.
-        engineStarted = true;
         setContentView (buildWebViewLayout());
     }
 

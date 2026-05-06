@@ -7,6 +7,7 @@ REPO_ROOT = Path("/app")
 BRIDGE_CPP = REPO_ROOT / ".github/android-templates/android_bridge.cpp"
 WORKFLOW_YML = REPO_ROOT / ".github/workflows/build-android.yml"
 APP_BUILD_GRADLE = REPO_ROOT / ".github/android-templates/app-build.gradle"
+MAIN_ACTIVITY_JAVA = REPO_ROOT / ".github/android-templates/MainActivity.java"
 
 
 def _read(path: Path) -> str:
@@ -78,3 +79,33 @@ def test_gradle_template_defines_debug_and_release_native_build_types():
     assert "release {" in content
     assert "-DCMAKE_BUILD_TYPE=Debug" in content
     assert "-DCMAKE_BUILD_TYPE=Release" in content
+
+
+# Module: MainActivity symbol regression for stale engineStarted reference
+def test_main_activity_has_no_stale_engine_started_symbol():
+    content = _read(MAIN_ACTIVITY_JAVA)
+
+    assert "engineStarted" not in content
+
+
+# Module: MainActivity runtime state consistency for engine/audio booleans
+def test_main_activity_declares_and_uses_engine_and_audio_state_flags():
+    content = _read(MAIN_ACTIVITY_JAVA)
+
+    assert "private boolean engineCreated" in content
+    assert "private boolean audioRunning" in content
+
+    # Both flags must be actively used in runtime checks/transitions.
+    assert content.count("engineCreated") >= 6
+    assert content.count("audioRunning") >= 6
+
+
+# Module: workflow ensures Java source is copied from tracked template
+def test_workflow_copies_main_activity_from_android_template():
+    content = _read(WORKFLOW_YML)
+
+    assert 'cp "$TPLS/MainActivity.java" \\' in content
+    assert (
+        "AndroidProject/app/src/main/java/com/subfigames/logicalchaos/melodymachine/"
+        "MainActivity.java"
+    ) in content
