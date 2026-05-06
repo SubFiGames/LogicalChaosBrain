@@ -68,9 +68,15 @@
    - Workflow no longer fails if release linker breaks; debug APK remains the guaranteed deliverable.
    - Added generated `CMakeLists.txt` sanitization step to replace `-fuse-ld=gold`, remove `-flto=thin`, and disable IPO strings.
 
+10. **Functional control-path fix (UI -> native -> DSP)**
+   - Files: `.github/android-templates/index.html`, `.github/android-templates/android_bridge.cpp`
+   - Enabled real JUCE processor creation (`useJuceProcessor_ = true`) so controls affect DSP, not fallback tone.
+   - Split JS bridge routing: event endpoints use `sendEvent`, value endpoints use `sendParameter`.
+   - Fixed native parameter handling to convert raw UI values with `convertTo0to1(...)` before `setValueNotifyingHost(...)`.
+
 ## Validation Performed
 - Testing agent runs completed with passing checks.
-- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`, `/app/test_reports/iteration_4.json`, `/app/test_reports/iteration_5.json`, `/app/test_reports/iteration_6.json`
+- Test reports: `/app/test_reports/iteration_1.json`, `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`, `/app/test_reports/iteration_4.json`, `/app/test_reports/iteration_5.json`, `/app/test_reports/iteration_6.json`, `/app/test_reports/iteration_7.json`
 - Added test coverage artifact: `/app/backend/tests/test_android_ci_templates.py`
 - Validated:
   - bridge structure no longer broken,
@@ -82,6 +88,7 @@
   - mount trigger now runs after inline `createPatchView` definition.
   - release template now enforces lld + IPO/LTO-off safeguards.
   - workflow guarantees debug artifact output even when release native linker fails.
+  - control routing/normalization path now matches Main.cmajor endpoint types.
 
 ## Prioritized Backlog
 - **P0**
