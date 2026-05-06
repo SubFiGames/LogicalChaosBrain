@@ -1,5 +1,8 @@
 """Regression checks for Android CI workflow and template files."""
 
+import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -8,6 +11,8 @@ BRIDGE_CPP = REPO_ROOT / ".github/android-templates/android_bridge.cpp"
 WORKFLOW_YML = REPO_ROOT / ".github/workflows/build-android.yml"
 APP_BUILD_GRADLE = REPO_ROOT / ".github/android-templates/app-build.gradle"
 MAIN_ACTIVITY_JAVA = REPO_ROOT / ".github/android-templates/MainActivity.java"
+INDEX_HTML = REPO_ROOT / ".github/android-templates/index.html"
+VIEW_JS = REPO_ROOT / "view.js"
 
 
 def _read(path: Path) -> str:
@@ -33,6 +38,33 @@ def _extract_block(text: str, anchor: str) -> str:
                 return text[start : idx + 1]
 
     raise AssertionError(f"No matching closing brace for: {anchor}")
+
+
+def _assert_js_syntax_valid(js_source: str, label: str) -> None:
+    """Validate JS parses using Node.js parser."""
+    with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as tmp:
+        tmp.write(js_source)
+        tmp_path = tmp.name
+
+    try:
+        result = subprocess.run(
+            ["node", "--check", tmp_path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    assert result.returncode == 0, (
+        f"JS syntax invalid for {label}:\n"
+        f"stdout={result.stdout}\n"
+        f"stderr={result.stderr}"
+    )
+
+
+def _extract_inline_scripts(html: str) -> list[str]:
+    return re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL)
 
 
 # Module: native bridge C++ structural checks around create/startAudio
@@ -109,3 +141,46 @@ def test_workflow_copies_main_activity_from_android_template():
         "AndroidProject/app/src/main/java/com/subfigames/logicalchaos/melodymachine/"
         "MainActivity.java"
     ) in content
+
+
+# Module: Android index template mount/bridge and inline replacement regressions
+def test_index_template_contains_single_inline_view_placeholder():
+    content = _read(INDEX_HTML)
+    assert content.count("/*__INLINE_VIEW_JS__*/") == 1
+
+
+# Module: Android index template should not contain duplicated IIFE closers
+def test_index_template_has_no_duplicate_iife_closer_sequence():
+    content = _read(INDEX_HTML)
+    assert "})();})();" not in content
+
+
+# Module: Android index template script blocks must be valid JS before inlining
+def test_index_template_inline_scripts_are_syntax_valid():
+    content = _read(INDEX_HTML)
+    scripts = _extract_inline_scripts(content)
+    assert len(scripts) >= 3
+
+    for idx, script in enumerate(scripts, start=1):
+        # Placeholder block is not JS until replaced by workflow.
+        if "/*__INLINE_VIEW_JS__*/" in script:
+            continue
+        _assert_js_syntax_valid(script, f"index.html script #{idx}")
+
+
+# Module: workflow-style inlined output should parse after view.js transform
+def test_workflow_inlined_index_output_scripts_are_syntax_valid():
+    template = _read(INDEX_HTML)
+    view = _read(VIEW_JS)
+
+    transformed_view = view.replace(
+        "export default function createPatchView",
+        "window.createPatchView = function createPatchView",
+        1,
+    )
+    inlined_html = template.replace("/*__INLINE_VIEW_JS__*/", transformed_view)
+
+    scripts = _extract_inline_scripts(inlined_html)
+    assert len(scripts) >= 3
+    for idx, script in enumerate(scripts, start=1):
+        _assert_js_syntax_valid(script, f"inlined index.html script #{idx}")
