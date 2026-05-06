@@ -61,6 +61,8 @@ public class MainActivity extends Activity
     private String  loadError    = null;
     private String  startError   = null;
     private boolean engineStarted = false;
+    // Back-compat alias for older conflict-resolved variants
+    private boolean engineCreated = false;
     private WebView webView      = null;
 
     // --- Native methods (android_bridge.cpp) --------------------------------
@@ -109,31 +111,18 @@ public class MainActivity extends Activity
             Log.w (TAG, "nativeSetCrashLogPath threw — continuing", t);
         }
 
-        try
-        {
-            startError = nativeStart();
-        }
-        catch (Throwable t)
-        {
-            startError = stackTraceString (t);
-        }
-
-        if (startError == null || startError.isEmpty())
-        {
-            engineStarted = true;
-            setContentView (buildWebViewLayout());
-        }
-        else
-        {
-            setContentView (buildScrollableStatusLayout (
-                "Audio engine failed to start", startError));
-        }
+        // Do not create the audio engine during Activity startup.
+        // Engine creation happens lazily from AndroidHost.startAudio(), which
+        // gives better diagnostics and avoids blocking or crashing the UI path.
+        engineStarted = true;
+        engineCreated = true;
+        setContentView (buildWebViewLayout());
     }
 
     @Override
     protected void onDestroy()
     {
-        try { if (engineStarted) nativeStop(); }
+        try { if (engineStarted || engineCreated) nativeStop(); }
         catch (Throwable t) { Log.e (TAG, "nativeStop failed", t); }
         super.onDestroy();
     }
@@ -345,7 +334,7 @@ public class MainActivity extends Activity
         @JavascriptInterface
         public String getNativeStatus()
         {
-            return "lib=" + loadedLib + "; started=" + engineStarted;
+            return "lib=" + loadedLib + "; started=" + (engineStarted || engineCreated);
         }
 
         // Called by the WebView UI to start/stop audio.  Returns "" on success

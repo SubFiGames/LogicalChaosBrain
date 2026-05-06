@@ -110,11 +110,27 @@ print_info "✓ JUCE project generated"
 
 # Create Android project structure
 print_info "Creating Android project structure..."
-mkdir -p AndroidProject/app/src/main/{cpp,java,res}
-mkdir -p AndroidProject/app/src/main/java/com/subfigames/logicalchaos
+mkdir -p AndroidProject/app/src/main/cpp
+mkdir -p AndroidProject/app/src/main/java/com/subfigames/logicalchaos/melodymachine
+mkdir -p AndroidProject/app/src/main/res/values
+mkdir -p AndroidProject/app/src/main/assets
 
-# Copy generated JUCE code
+# Copy generated JUCE code + Android bridge
+test -d GeneratedApp || { print_error "GeneratedApp missing"; exit 1; }
 cp -r GeneratedApp/* AndroidProject/app/src/main/cpp/
+cp .github/android-templates/android_bridge.cpp AndroidProject/app/src/main/cpp/android_bridge.cpp
+
+# Inline view.js into index.html (Android WebView file:// safe)
+python3 - << 'PYINLINE'
+from pathlib import Path
+template = Path('.github/android-templates/index.html').read_text()
+view = Path('view.js').read_text()
+view = view.replace('export default function createPatchView',
+                    'window.createPatchView = function createPatchView', 1)
+Path('AndroidProject/app/src/main/assets/index.html').write_text(
+    template.replace('/*__INLINE_VIEW_JS__*/', view)
+)
+PYINLINE
 
 print_info "✓ Android project structure created"
 
@@ -226,6 +242,23 @@ android.enableJetifier=true
 EOFPROPS
 
 print_info "✓ Gradle configuration generated"
+
+# Copy Android template files (manifest/activity/strings/build scripts)
+cp .github/android-templates/build.gradle AndroidProject/build.gradle
+cp .github/android-templates/app-build.gradle AndroidProject/app/build.gradle
+cp .github/android-templates/settings.gradle AndroidProject/settings.gradle
+cp .github/android-templates/gradle.properties AndroidProject/gradle.properties
+cp .github/android-templates/AndroidManifest.xml AndroidProject/app/src/main/AndroidManifest.xml
+cp .github/android-templates/strings.xml AndroidProject/app/src/main/res/values/strings.xml
+cp .github/android-templates/MainActivity.java AndroidProject/app/src/main/java/com/subfigames/logicalchaos/melodymachine/MainActivity.java
+cp .github/android-templates/cmake-android-jni-append.cmake /tmp/cmake-android-jni-append.cmake
+
+# Append JNI bridge wiring into generated CMakeLists
+CMK=AndroidProject/app/src/main/cpp/CMakeLists.txt
+JUCE_TARGET=$(grep -oE 'juce_add_plugin\s*\(\s*[A-Za-z_][A-Za-z0-9_]*' "$CMK" | head -1 | awk -F'[(]' '{print $2}' | tr -d ' ')
+if [ -z "$JUCE_TARGET" ]; then JUCE_TARGET="$APP_NAME"; fi
+sed "s/@JUCE_TARGET@/${JUCE_TARGET}/g" /tmp/cmake-android-jni-append.cmake >> "$CMK"
+
 
 # Install Gradle wrapper if not present
 if [ ! -f "AndroidProject/gradlew" ]; then
