@@ -509,22 +509,275 @@ private:
     void generateFallbackPattern()
     {
         const int len = clampInt (patternLength_, 1, 32);
-        for (int i = 0; i < len; ++i)
+
+        auto nextSeed = [&]() -> int
         {
             seed_ = seed_ * 1103515245 + 12345;
-            const float r = (float) (seed_ & 0x7fffffff) / 2147483647.0f;
+            return (int) ((seed_ >> 8) & 0x7fffffff);
+        };
 
-            stepActive_[i] = (r < (density_ / 100.0f)) ? 1 : 0;
-            if (i == 0) stepActive_[i] = 1;
+        auto chance = [&](int percent) -> bool
+        {
+            percent = clampInt (percent, 0, 100);
+            return (nextSeed() % 100) < percent;
+        };
 
-            const int octave = ((seed_ >> 4) % 3);
-            const int degree = ((seed_ >> 8) % 5) * 2;
-            stepNotes_[i] = rootNote_ + degree + (octave * 12);
+        auto scaleSize = [&](int scale) -> int
+        {
+            switch (scale)
+            {
+                case 7:  return 5;   // Minor Pentatonic
+                case 8:  return 5;   // Major Pentatonic
+                case 10: return 12;  // Chromatic
+                default: return 7;
+            }
+        };
 
-            seed_ = seed_ * 1103515245 + 12345;
-            stepGlide_[i] = (((seed_ >> 2) % 100) < (int) chaos_) ? 1 : 0;
-            seed_ = seed_ * 1103515245 + 12345;
-            stepRandom_[i] = (((seed_ >> 6) % 100) < 20) ? 1 : 0;
+        auto scaleSemitone = [&](int scale, int degree) -> int
+        {
+            static const int major[7]          = { 0, 2, 4, 5, 7, 9, 11 };
+            static const int naturalMinor[7]   = { 0, 2, 3, 5, 7, 8, 10 };
+            static const int harmonicMinor[7]  = { 0, 2, 3, 5, 7, 8, 11 };
+            static const int dorian[7]         = { 0, 2, 3, 5, 7, 9, 10 };
+            static const int phrygian[7]       = { 0, 1, 3, 5, 7, 8, 10 };
+            static const int lydian[7]         = { 0, 2, 4, 6, 7, 9, 11 };
+            static const int mixolydian[7]     = { 0, 2, 4, 5, 7, 9, 10 };
+            static const int minorPent[5]      = { 0, 3, 5, 7, 10 };
+            static const int majorPent[5]      = { 0, 2, 4, 7, 9 };
+            static const int blues[7]          = { 0, 3, 5, 6, 7, 10, 12 };
+            static const int chromatic[12]     = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+
+            const int size = scaleSize (scale);
+            int octave = 0;
+
+            while (degree < 0)
+            {
+                degree += size;
+                --octave;
+            }
+
+            while (degree >= size)
+            {
+                degree -= size;
+                ++octave;
+            }
+
+            const int* table = major;
+
+            switch (scale)
+            {
+                case 1:  table = naturalMinor;  break;
+                case 2:  table = harmonicMinor; break;
+                case 3:  table = dorian;        break;
+                case 4:  table = phrygian;      break;
+                case 5:  table = lydian;        break;
+                case 6:  table = mixolydian;    break;
+                case 7:  table = minorPent;     break;
+                case 8:  table = majorPent;     break;
+                case 9:  table = blues;         break;
+                case 10: table = chromatic;     break;
+                default: table = major;         break;
+            }
+
+            return table[degree] + octave * 12;
+        };
+
+        auto pickAutoScale = [&]() -> int
+        {
+            switch (styleType_)
+            {
+                case 1:  return chance (45) ? 2 : 0;  // Classical: Major / Harmonic Minor
+                case 2:  return chance (65) ? 0 : 1;  // Pop: mostly Major
+                case 3:  return chance (50) ? 5 : 8;  // Ambient: Lydian / Major Pentatonic
+                case 4:  return chance (70) ? 1 : 3;  // Synthwave: Minor / Dorian
+                case 5:  return chance (60) ? 1 : 4;  // Techno: Minor / Phrygian
+                case 6:  return chance (60) ? 3 : 6;  // House: Dorian / Mixolydian
+                case 7:  return chance (70) ? 7 : 9;  // Hip Hop / Trap: Minor Pent / Blues
+                case 8:  return chance (60) ? 2 : 1;  // Cinematic: Harmonic Minor / Minor
+                case 9:  return chance (50) ? 4 : 10; // Experimental: Phrygian / Chromatic
+                default: return scaleType_;
+            }
+        };
+
+        auto pickAutoProgression = [&]() -> int
+        {
+            if (progressionType_ != 0)
+                return progressionType_;
+
+            switch (styleType_)
+            {
+                case 1:  return chance (50) ? 2 : 4; // Classical
+                case 2:  return 1;                   // Pop
+                case 3:  return chance (50) ? 2 : 3; // Ambient
+                case 4:  return 3;                   // Synthwave
+                case 5:  return chance (50) ? 3 : 4; // Techno
+                case 6:  return chance (50) ? 5 : 1; // House
+                case 7:  return chance (50) ? 3 : 4; // Hip Hop / Trap
+                case 8:  return chance (50) ? 4 : 3; // Cinematic
+                case 9:  return chance (50) ? 5 : 3; // Experimental
+                default: return chance (50) ? 1 : 2;
+            }
+        };
+
+        auto progressionRoot = [&](int progression, int phrase) -> int
+        {
+            phrase = clampInt (phrase, 0, 3);
+
+            static const int pop[4]       = { 0, 4, 5, 3 }; // I - V - vi - IV
+            static const int classical[4] = { 0, 3, 4, 0 }; // I - IV - V - I
+            static const int minorEpic[4] = { 0, 5, 2, 6 }; // i - VI - III - VII
+            static const int dark[4]      = { 0, 3, 4, 0 }; // i - iv - V - i
+            static const int jazzish[4]   = { 1, 4, 0, 5 }; // ii - V - I - vi
+
+            switch (progression)
+            {
+                case 1:  return pop[phrase];
+                case 2:  return classical[phrase];
+                case 3:  return minorEpic[phrase];
+                case 4:  return dark[phrase];
+                case 5:  return jazzish[phrase];
+                default: return pop[phrase];
+            }
+        };
+
+        auto shapeOffset = [&](int step) -> int
+        {
+            const int effectiveShape = (shapeType_ == 0)
+                                     ? ((styleType_ == 3) ? 4 :
+                                        (styleType_ == 8) ? 3 :
+                                        (styleType_ == 1) ? 3 :
+                                        (styleType_ == 9) ? 5 : 0)
+                                     : shapeType_;
+
+            const float pos = (len <= 1) ? 0.0f : (float) step / (float) (len - 1);
+
+            switch (effectiveShape)
+            {
+                case 1:  return (int) std::lround (pos * 4.0f);                         // Rise
+                case 2:  return (int) std::lround ((1.0f - pos) * 4.0f);                 // Fall
+                case 3:  return (int) std::lround ((1.0f - std::abs (pos * 2.0f - 1.0f)) * 5.0f); // Arch
+                case 4:  return (step % 8 < 4) ? 2 : -1;                                // Wave
+                case 5:  return (step % 8 < 4) ? 0 : 2;                                 // Call / Response
+                default: return 0;
+            }
+        };
+
+        const int chosenScale = (scaleType_ == 0 && styleType_ != 0) ? pickAutoScale() : scaleType_;
+        const int chosenProgression = pickAutoProgression();
+        const int complexity = clampInt (complexityType_, 0, 3);
+
+        int lastDegree = 0;
+
+        for (int i = 0; i < 32; ++i)
+        {
+            if (i >= len)
+            {
+                stepActive_[i] = 0;
+                stepGlide_[i] = 0;
+                stepRandom_[i] = 0;
+                continue;
+            }
+
+            const int phrase = clampInt ((i * 4) / len, 0, 3);
+            const int beatInPhrase = i % 4;
+            const bool strongBeat = (beatInPhrase == 0 || beatInPhrase == 2);
+
+            const int chordRoot = progressionRoot (chosenProgression, phrase);
+
+            int baseDensity = (int) std::lround (density_);
+            if (complexity == 0) baseDensity -= 8;
+            if (complexity == 2) baseDensity += 6;
+            if (complexity == 3) baseDensity += 12;
+
+            baseDensity = clampInt (baseDensity, 20, 100);
+
+            stepActive_[i] = chance (baseDensity) ? 1 : 0;
+
+            if (i == 0 || i == len - 1 || strongBeat)
+                stepActive_[i] = 1;
+
+            int degree = chordRoot;
+
+            if (strongBeat)
+            {
+                const int chordChoice = nextSeed() % 3;
+                degree = chordRoot + (chordChoice == 0 ? 0 : (chordChoice == 1 ? 2 : 4));
+            }
+            else
+            {
+                if (complexity == 0)
+                {
+                    // Simple: mostly stepwise, close to previous note.
+                    const int move = (nextSeed() % 3) - 1;
+                    degree = lastDegree + move;
+                }
+                else if (complexity == 1)
+                {
+                    // Nice: chord tone plus small passing movement.
+                    const int move = (nextSeed() % 5) - 2;
+                    degree = chordRoot + move + ((beatInPhrase == 1) ? 1 : 0);
+                }
+                else if (complexity == 2)
+                {
+                    // Advanced: more passing notes and wider melodic answers.
+                    const int move = (nextSeed() % 7) - 3;
+                    degree = lastDegree + move + ((i % 8 >= 4) ? 1 : 0);
+                }
+                else
+                {
+                    // Wild: still scale-aware, but jumps more.
+                    const int move = (nextSeed() % 11) - 5;
+                    degree = chordRoot + move;
+                }
+            }
+
+            degree += shapeOffset (i);
+
+            const int chaosAmount = clampInt ((int) std::lround (chaos_), 0, 100);
+
+            if (chance (chaosAmount / 5))
+            {
+                const int chaosJump = (nextSeed() % (3 + complexity * 2)) - (1 + complexity);
+                degree += chaosJump;
+            }
+
+            if (chance ((int) std::lround (mutation_) / 8))
+            {
+                degree += (nextSeed() % 3) - 1;
+            }
+
+            int octave = 0;
+
+            if (styleType_ == 3) octave = 1;              // Ambient a little higher
+            if (styleType_ == 4) octave = chance (45) ? 1 : 0; // Synthwave octave movement
+            if (styleType_ == 7) octave = chance (35) ? -1 : 0; // Trap darker/lower
+            if (styleType_ == 8) octave = chance (40) ? 1 : 0;  // Cinematic lifts
+            if (complexity == 3 && chance (25)) octave += chance (50) ? 1 : -1;
+
+            int note = rootNote_ + scaleSemitone (chosenScale, degree) + octave * 12;
+
+            while (note < 36) note += 12;
+            while (note > 84) note -= 12;
+
+            stepNotes_[i] = clampInt (note, 0, 127);
+            lastDegree = degree;
+
+            int glideChance = 0;
+            if (complexity == 1) glideChance = chaosAmount / 10;
+            if (complexity == 2) glideChance = chaosAmount / 6;
+            if (complexity == 3) glideChance = chaosAmount / 4;
+
+            if (styleType_ == 4) glideChance += 10; // Synthwave
+            if (styleType_ == 7) glideChance += 8;  // Hip Hop / Trap
+            if (styleType_ == 1) glideChance -= 8;  // Classical
+
+            stepGlide_[i] = chance (clampInt (glideChance, 0, 65)) ? 1 : 0;
+
+            int randomChance = 4 + complexity * 5;
+            if (styleType_ == 9) randomChance += 10;
+            if (styleType_ == 1) randomChance -= 4;
+
+            stepRandom_[i] = chance (clampInt (randomChance, 0, 40)) ? 1 : 0;
         }
     }
 
