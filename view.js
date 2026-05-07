@@ -8,7 +8,12 @@ export default function createPatchView (patchConnection)
         steps: Array.from ({ length: 32 }, () => ({ note: 48, active: 0, glide: 0, randomise: 0 })),
         length: 16,
         selectedStep: 0,
-        playingStep: -1
+        playingStep: -1,
+
+        // MIDI playback state.
+        lastMidiNote: -1,
+        lastMidiStep: -1,
+        midiPlaybackEnabled: true
     };
 
     // ----- Helpers -----
@@ -380,7 +385,11 @@ export default function createPatchView (patchConnection)
                     <label>Steps
                         <select id="patternLength">
                             <option value="8">8</option>
+                            <option value="12">12</option>
+                            <option value="14">14</option>
                             <option value="16" selected>16</option>
+                            <option value="18">18</option>
+                            <option value="20">20</option>
                             <option value="24">24</option>
                             <option value="32">32</option>
                         </select>
@@ -767,6 +776,9 @@ export default function createPatchView (patchConnection)
         const host = getAndroidHost();
         const enabled = $('midiEnabled').checked;
 
+        if (! enabled)
+            sendMidiOffForLastNote();
+
         if (! host || ! host.setMidiEnabled)
         {
             setMidiStatus ('AndroidHost MIDI bridge not available.');
@@ -805,6 +817,93 @@ export default function createPatchView (patchConnection)
         {
             setMidiStatus ('MIDI test note failed: ' + e);
         }
+    }
+    function isMidiSendEnabled ()
+    {
+        const box = $('midiEnabled');
+        return !! (box && box.checked);
+    }
+
+    function sendMidiOffForLastNote ()
+    {
+        const host = getAndroidHost();
+
+        if (! host || ! host.sendMidiNoteOff)
+            return;
+
+        if (state.lastMidiNote >= 0)
+        {
+            try
+            {
+                host.sendMidiNoteOff (state.lastMidiNote);
+            }
+            catch (e)
+            {
+                setMidiStatus ('MIDI note off failed: ' + e);
+            }
+
+            state.lastMidiNote = -1;
+            state.lastMidiStep = -1;
+        }
+    }
+
+    function sendMidiForStep (stepIndex)
+    {
+        if (! isMidiSendEnabled())
+        {
+            sendMidiOffForLastNote();
+            return;
+        }
+
+        const host = getAndroidHost();
+
+        if (! host || ! host.sendMidiNoteOn || ! host.sendMidiNoteOff)
+            return;
+
+        if (stepIndex < 0 || stepIndex >= state.length)
+        {
+            sendMidiOffForLastNote();
+            return;
+        }
+
+        const step = state.steps[stepIndex];
+
+        // Always turn the previous note off before starting the next one.
+        // This avoids stuck notes on external synths.
+        sendMidiOffForLastNote();
+
+        if (! step || ! step.active)
+            return;
+
+        const note = clampInt (step.note, 0, 127);
+
+        try
+        {
+            host.sendMidiNoteOn (note);
+            state.lastMidiNote = note;
+            state.lastMidiStep = stepIndex;
+        }
+        catch (e)
+        {
+            setMidiStatus ('MIDI note on failed: ' + e);
+        }
+    }
+
+    function setPlayingStep (stepIndex)
+    {
+        const nextStep = clampInt (stepIndex, -1, 31);
+
+        if (state.playingStep === nextStep)
+            return;
+
+        state.playingStep = nextStep;
+
+        if (nextStep < 0)
+            sendMidiOffForLastNote();
+        else
+            sendMidiForStep (nextStep);
+
+        drawGrid();
     }
     // ----- drawGrid -----
     function drawGrid ()
@@ -911,23 +1010,39 @@ export default function createPatchView (patchConnection)
         setTimeout (() => send ('requestPatternDump', 1), 80);
     });
     $('btnPlay').addEventListener ('click', () => send ('play', 1));
-    $('btnStop').addEventListener ('click', () =>
+        $('btnStop').addEventListener ('click', () =>
     {
-        state.playingStep = -1;
         send ('stop', 1);
-        drawGrid ();
+        setPlayingStep (-1);
     });
 
-    $('btnClear').addEventListener ('click', () => send ('clearPattern', 1));
+        $('btnClear').addEventListener ('click', () =>
+    {
+        send ('clearPattern', 1);
+        setPlayingStep (-1);
+
+        for (let i = 0; i < 32; ++i)
+            state.steps[i] = { note: 48, active: 0, glide: 0, randomise: 0 };
+
+        drawGrid ();
+        drawEditor ();
+    });
     $('btnDump').addEventListener  ('click', () => send ('requestPatternDump', 1));
 
     $('patternLength').addEventListener ('change', (e) =>
     {
         state.length = clampInt (e.target.value, 8, 32);
         send ('patternLength', state.length);
+    
         if (state.selectedStep >= state.length)
             state.selectedStep = state.length - 1;
-        drawGrid (); drawEditor ();
+        if (state.playingStep >= state.length)
+            setPlayingStep (-1);
+        if (state.playingStep >= state.length)
+            setPlayingStep (-1);
+    
+        drawGrid ();
+        drawEditor ();
     });
     $('timeSignature').addEventListener ('change', (e) =>
     {
@@ -1018,9 +1133,9 @@ export default function createPatchView (patchConnection)
 
             if (kind === 1)
             {
-                // Playback position update
-                state.playingStep = (stepIndex >= 32) ? -1 : stepIndex;
-                drawGrid ();
+                // Playback position update.
+                // Route through setPlayingStep so the MIDI output follows the sequencer.
+                setPlayingStep ((stepIndex >= 32) ? -1 : stepIndex);
                 return;
             }
 
