@@ -3,9 +3,6 @@ name: Build Windows VST3
 on:
   workflow_dispatch:
 
-env:
-  CMAJOR_VERSION: 1.0.3096
-
 permissions:
   contents: read
 
@@ -17,154 +14,24 @@ jobs:
       - name: Checkout project
         uses: actions/checkout@v4
 
-      - name: Clone JUCE
+      - name: Checkout Steinberg VST3 SDK
+        uses: actions/checkout@v4
+        with:
+          repository: steinbergmedia/vst3sdk
+          submodules: recursive
+          path: tools/vst3sdk
+
+      - name: Validate fallback VST files
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
-          New-Item -ItemType Directory -Force -Path tools | Out-Null
-
-          if (Test-Path "tools\JUCE") {
-            Remove-Item "tools\JUCE" -Recurse -Force
-          }
-
-          git clone --depth 1 https://github.com/juce-framework/JUCE.git tools/JUCE
-
-          if (-not (Test-Path "tools\JUCE\CMakeLists.txt")) {
-            Write-Error "JUCE clone failed. tools/JUCE/CMakeLists.txt was not found."
-            exit 1
-          }
-
-      - name: Install Cmajor Windows tools
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $exeUrl = "https://github.com/cmajor-lang/cmajor/releases/download/$env:CMAJOR_VERSION/cmajor_win_x64.exe"
-          $installer = "cmajor_win_x64.exe"
-          $installDir = Join-Path $env:GITHUB_WORKSPACE "tools\cmajor"
-
-          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-
-          Write-Host "Downloading Cmajor Windows installer from:"
-          Write-Host $exeUrl
-
-          Invoke-WebRequest -Uri $exeUrl -OutFile $installer
-
-          if (-not (Test-Path $installer)) {
-            Write-Error "Cmajor installer was not downloaded."
-            exit 1
-          }
-
-          $downloaded = Get-Item $installer
-          Write-Host "Downloaded installer:"
-          Write-Host "Path: $($downloaded.FullName)"
-          Write-Host "Size: $($downloaded.Length) bytes"
-
-          if ($downloaded.Length -lt 1000000) {
-            Write-Error "Downloaded file is suspiciously small. GitHub may have returned an error page instead of the installer."
-            Get-Content $installer -TotalCount 20
-            exit 1
-          }
-
-          Write-Host "Installing Cmajor silently to:"
-          Write-Host $installDir
-
-          $arguments = @(
-            "/VERYSILENT",
-            "/SUPPRESSMSGBOXES",
-            "/NORESTART",
-            "/SP-",
-            "/DIR=`"$installDir`""
-          )
-
-          $process = Start-Process `
-            -FilePath ".\$installer" `
-            -ArgumentList $arguments `
-            -Wait `
-            -PassThru
-
-          Write-Host "Installer exit code: $($process.ExitCode)"
-
-          if ($process.ExitCode -ne 0) {
-            Write-Warning "Installer returned a non-zero exit code. Checking for cmaj.exe anyway..."
-          }
-
-          Start-Sleep -Seconds 3
-
-          Write-Host "Searching for cmaj.exe..."
-
-          $searchRoots = @(
-            $installDir,
-            "$env:GITHUB_WORKSPACE\tools",
-            "$env:LOCALAPPDATA\Programs",
-            "$env:ProgramFiles",
-            "${env:ProgramFiles(x86)}"
-          ) | Where-Object { $_ -and (Test-Path $_) }
-
-          $cmaj = $null
-
-          foreach ($root in $searchRoots) {
-            Write-Host "Searching in: $root"
-
-            $found = Get-ChildItem -Path $root -Recurse -Filter "cmaj.exe" -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-
-            if ($found) {
-              $cmaj = $found
-              break
-            }
-          }
-
-          if (-not $cmaj) {
-            Write-Error "Could not find cmaj.exe after installing Cmajor."
-            Write-Host "Install folder contents:"
-            Get-ChildItem -Path $installDir -Recurse -ErrorAction SilentlyContinue |
-              ForEach-Object { Write-Host $_.FullName }
-            exit 1
-          }
-
-          Write-Host "Found cmaj.exe:"
-          Write-Host $cmaj.FullName
-
-          "CMAJ_PATH=$($cmaj.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "CMAJ_DIR=$($cmaj.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Verify cmaj executable
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $env:PATH = "$env:CMAJ_DIR;" + $env:PATH
-
-          Write-Host "CMAJ_PATH:"
-          Write-Host $env:CMAJ_PATH
-
-          Write-Host "CMAJ_DIR:"
-          Write-Host $env:CMAJ_DIR
-
-          Write-Host "Testing cmaj..."
-          & "$env:CMAJ_PATH" help
-
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "cmaj help failed with exit code $LASTEXITCODE"
-            exit 1
-          }
-
-      - name: Validate required project files
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          Write-Host "Repo files:"
-          Get-ChildItem -Path . -Recurse -File |
-            Select-Object -First 300 |
-            ForEach-Object { Write-Host $_.FullName }
 
           $requiredFiles = @(
-            "LogicalChaos.cmajorpatch",
-            "Main.cmajor",
-            "view.js"
+            "vst3\CMakeLists.txt",
+            "vst3\LogicalChaosVST3.cpp",
+            "src\LogicalChaosEngine.h",
+            "src\LogicalChaosEngine.cpp",
+            "tools\vst3sdk\CMakeLists.txt"
           )
 
           foreach ($file in $requiredFiles) {
@@ -174,70 +41,31 @@ jobs:
             }
           }
 
-          Write-Host "All required project files are present."
+          Write-Host "Fallback VST3 files are present."
 
-      - name: Generate JUCE project from Cmajor patch
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $env:PATH = "$env:CMAJ_DIR;" + $env:PATH
-          $jucePath = Join-Path $env:GITHUB_WORKSPACE "tools\JUCE"
-
-          if (Test-Path "GeneratedPlugin") {
-            Remove-Item "GeneratedPlugin" -Recurse -Force
-          }
-
-          Write-Host "Generating JUCE project..."
-          Write-Host "Cmajor: $env:CMAJ_PATH"
-          Write-Host "JUCE:   $jucePath"
-
-          & "$env:CMAJ_PATH" generate `
-            --target=juce `
-            --output=GeneratedPlugin `
-            "--jucePath=$jucePath" `
-            LogicalChaos.cmajorpatch
-
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "cmaj generate failed with exit code $LASTEXITCODE"
-            exit 1
-          }
-
-          if (-not (Test-Path "GeneratedPlugin\CMakeLists.txt")) {
-            Write-Error "GeneratedPlugin/CMakeLists.txt was not created."
-            Write-Host "GeneratedPlugin folder contents:"
-            Get-ChildItem -Path GeneratedPlugin -Recurse -ErrorAction SilentlyContinue |
-              ForEach-Object { Write-Host $_.FullName }
-            exit 1
-          }
-
-          Write-Host "Generated project:"
-          Get-ChildItem -Path GeneratedPlugin -Recurse |
-            Select-Object -First 300 |
-            ForEach-Object { Write-Host $_.FullName }
-
-      - name: Configure generated plugin
+      - name: Configure fallback VST3
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
           cmake `
-            -S GeneratedPlugin `
-            -B build `
+            -S vst3 `
+            -B build-vst3 `
             -G "Visual Studio 17 2022" `
-            -A x64
+            -A x64 `
+            -DVST3_SDK_ROOT="$env:GITHUB_WORKSPACE\tools\vst3sdk"
 
           if ($LASTEXITCODE -ne 0) {
             Write-Error "CMake configure failed with exit code $LASTEXITCODE"
             exit 1
           }
 
-      - name: Build generated plugin
+      - name: Build fallback VST3
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          cmake --build build --config Release --parallel
+          cmake --build build-vst3 --config Release --parallel
 
           if ($LASTEXITCODE -ne 0) {
             Write-Error "CMake build failed with exit code $LASTEXITCODE"
@@ -252,14 +80,14 @@ jobs:
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
 
           Write-Host "Searching for built VST3..."
-          $vst3 = Get-ChildItem -Path build -Recurse -Directory -Filter "*.vst3" |
+          $vst3 = Get-ChildItem -Path build-vst3 -Recurse -Directory -Filter "*.vst3" |
             Select-Object -First 1
 
           if (-not $vst3) {
             Write-Error "No VST3 bundle was built."
             Write-Host "Build folder contents:"
-            Get-ChildItem -Path build -Recurse |
-              Select-Object -First 500 |
+            Get-ChildItem -Path build-vst3 -Recurse |
+              Select-Object -First 600 |
               ForEach-Object { Write-Host $_.FullName }
             exit 1
           }
@@ -276,5 +104,5 @@ jobs:
       - name: Upload VST3 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LogicalChaos-Windows-VST3
+          name: LogicalChaos-Fallback-Windows-VST3
           path: artifact
