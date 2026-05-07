@@ -76,7 +76,7 @@ namespace
         if (! f) return;
 
         std::time_t t = std::time (nullptr);
-        char ts[32];
+        char ts[64];
         std::strftime (ts, sizeof (ts), "%H:%M:%S", std::localtime (&t));
         std::fprintf (f, "[%s] %s\n", ts, body);
         std::fclose (f);
@@ -459,7 +459,7 @@ private:
         if (id == "mutation")        return normalise (value, 0.0f, 100.0f);
         if (id == "density")         return normalise (value, 0.0f, 100.0f);
         if (id == "gate")            return normalise (value, 5.0f, 100.0f);
-        if (id == "patternLength")      return normalise (value, 8.0f, 32.0f);
+        if (id == "patternLength")      return normalise (value, 8.0f, 64.0f);
         if (id == "timeSigNumerator")   return normalise (value, 2.0f, 12.0f);
         if (id == "timeSigDenominator") return normalise (value, 4.0f, 8.0f);
         if (id == "rootNote")           return normalise (value, 36.0f, 72.0f);
@@ -492,7 +492,7 @@ private:
         if (id == "mutation")        { mutation_ = juce::jlimit (0.0f, 100.0f, value); return; }
         if (id == "density")         { density_ = juce::jlimit (0.0f, 100.0f, value); return; }
         if (id == "gate")            { gate_ = juce::jlimit (5.0f, 100.0f, value); return; }
-        if (id == "patternLength")      { patternLength_ = clampInt ((int) std::lround (value), 8, 32); return; }
+        if (id == "patternLength")      { patternLength_ = clampInt ((int) std::lround (value), 8, 64); return; }
         if (id == "timeSigNumerator")   { timeSigNumerator_ = clampInt ((int) std::lround (value), 2, 12); return; }
         if (id == "timeSigDenominator") { timeSigDenominator_ = clampInt ((int) std::lround (value), 4, 8); return; }
         if (id == "rootNote")           { rootNote_ = clampInt ((int) std::lround (value), 36, 72); return; }
@@ -512,7 +512,7 @@ private:
 
     void generateFallbackPattern()
     {
-        const int len = clampInt (patternLength_, 1, 32);
+        const int len = 64;
 
         auto nextSeed = [&]() -> int
         {
@@ -672,7 +672,7 @@ private:
 
         int lastDegree = 0;
 
-        for (int i = 0; i < 32; ++i)
+        for (int i = 0; i < 64; ++i)
         {
             if (i >= len)
             {
@@ -786,7 +786,7 @@ private:
     }
     void mutateFallbackPattern()
     {
-        const int len = clampInt (patternLength_, 1, 32);
+        const int len = 64;
         const int amount = clampInt ((int) std::lround (mutation_), 0, 100);
 
         auto nextSeed = [&]() -> int
@@ -853,17 +853,10 @@ private:
             if (chance (randomChance))
                 stepRandom_[i] = stepRandom_[i] ? 0 : 1;
         }
-
-        for (int i = len; i < 32; ++i)
-        {
-            stepActive_[i] = 0;
-            stepGlide_[i] = 0;
-            stepRandom_[i] = 0;
-        }
     }
     int packStepMessage (int kind, int step) const
     {
-        const int s = clampInt (step, 0, 31);
+        const int s = clampInt (step, 0, 63);
         return (kind << 28)
              | ((s              & 255) << 20)
              | ((stepNotes_[s]  & 127) << 13)
@@ -880,7 +873,7 @@ private:
 
     void queuePatternDump()
     {
-        for (int i = 0; i < 32; ++i)
+        for (int i = 0; i < 64; ++i)
             queueUiEvent (packStepMessage (2, i));
     }
 
@@ -893,6 +886,7 @@ private:
             isPlaying_ = true;
             currentStep_ = 0;
             stepSamplesRemaining_ = 0;
+            gateSamplesRemaining_ = 0;
             return;
         }
 
@@ -901,6 +895,8 @@ private:
             isPlaying_ = false;
             envActive_ = false;
             envLevel_ = 0.0f;
+            stepSamplesRemaining_ = 0;
+            gateSamplesRemaining_ = 0;
             queueUiEvent ((1 << 28) | (255 << 20));
             return;
         }
@@ -914,11 +910,12 @@ private:
         if (id == "mutate")
         {
             mutateFallbackPattern();
+            queuePatternDump();
             return;
         }
         if (id == "clearPattern")
         {
-            for (int i = 0; i < 32; ++i) stepActive_[i] = 0;
+            for (int i = 0; i < 64; ++i) stepActive_[i] = 0;
             queuePatternDump();
             return;
         }
@@ -933,7 +930,7 @@ private:
         {
             const int packed = (int) std::llround (value);
             const int step = (packed >> 20) & 255;
-            if (step >= 0 && step < 32)
+            if (step >= 0 && step < 64)
             {
                 stepNotes_[step] = (packed >> 13) & 127;
                 stepActive_[step] = (packed >> 2) & 1;
@@ -956,7 +953,7 @@ private:
             {
                 if (stepSamplesRemaining_ <= 0)
                 {
-                    const int len = clampInt (patternLength_, 1, 32);
+                    const int len = clampInt (patternLength_, 1, 64);
                     if (currentStep_ < 0 || currentStep_ >= len)
                         currentStep_ = 0;
 
@@ -981,19 +978,30 @@ private:
 
                     const float safeTempo = juce::jmax (1.0f, tempo_);
                     const float quarter = (float) (sr * 60.0 / safeTempo);
-                    stepSamplesRemaining_ = juce::jmax (1, (int) (quarter * 0.25f));
-
-                    const float gateAmt = juce::jlimit (0.0f, 1.0f, gate_ / 100.0f);
-                    if (gateAmt < 0.99f && envActive_)
-                    {
-                        const int noteOffAt = (int) (quarter * 0.25f * gateAmt);
-                        if (noteOffAt < stepSamplesRemaining_)
-                            stepSamplesRemaining_ = noteOffAt + 1;
-                    }
+                    
+                    // For now one sequencer step = one sixteenth note.
+                    // At 120 BPM, one quarter note is 0.5s, so one step is 0.125s.
+                    const int samplesPerStep = juce::jmax (1, (int) (quarter * 0.25f));
+                    stepSamplesRemaining_ = samplesPerStep;
+                    
+                    // Gate controls note length inside the step.
+                    // It must never shorten the step clock itself.
+                    const float gateAmt = juce::jlimit (0.05f, 1.0f, gate_ / 100.0f);
+                    gateSamplesRemaining_ = envActive_
+                                           ? juce::jmax (1, (int) (samplesPerStep * gateAmt))
+                                           : 0;
 
                     currentStep_ = (currentStep_ + 1) % len;
                 }
 
+                if (gateSamplesRemaining_ > 0)
+                {
+                    --gateSamplesRemaining_;
+                
+                    if (gateSamplesRemaining_ == 0)
+                        envActive_ = false;
+                }
+                
                 --stepSamplesRemaining_;
             }
 
@@ -1096,18 +1104,18 @@ private:
 
     // Fallback synth/sequencer state (used when JUCE processor is disabled).
     // Fallback synth/sequencer state (used when JUCE processor is disabled).
-    int                                   stepNotes_[32]   = {
+    int                                   stepNotes_[64]   = {
                                                 48,48,48,48,48,48,48,48,
                                                 48,48,48,48,48,48,48,48,
                                                 48,48,48,48,48,48,48,48,
                                                 48,48,48,48,48,48,48,48 };
-    int                                   stepActive_[32]  = {
+    int                                   stepActive_[64]  = {
                                                 1,1,1,1,1,1,1,1,
                                                 1,1,1,1,1,1,1,1,
                                                 0,0,0,0,0,0,0,0,
                                                 0,0,0,0,0,0,0,0 };
-    int                                   stepGlide_[32]   = { 0 };
-    int                                   stepRandom_[32]  = { 0 };
+    int                                   stepGlide_[64]   = { 0 };
+    int                                   stepRandom_[64]  = { 0 };
     std::vector<int>                      pendingUiEvents_;
 
     float                                 tempo_           = 120.0f;
@@ -1130,6 +1138,7 @@ private:
     bool                                  isPlaying_       = false;
     int                                   currentStep_     = 0;
     int                                   stepSamplesRemaining_ = 0;
+    int                                   gateSamplesRemaining_ = 0;
     float                                 currentFreq_     = 100.0f;
     float                                 targetFreq_      = 100.0f;
     float                                 envLevel_        = 0.0f;
