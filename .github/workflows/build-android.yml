@@ -23,24 +23,15 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      # ------------------------------------------------------------------ #
-      # 1. Source checkout
-      # ------------------------------------------------------------------ #
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------------ #
-      # 2. Java
-      # ------------------------------------------------------------------ #
       - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: "temurin"
 
-      # ------------------------------------------------------------------ #
-      # 3. Android SDK  (no NDK here — handled by nttld/setup-ndk below)
-      # ------------------------------------------------------------------ #
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -49,9 +40,6 @@ jobs:
             build-tools;33.0.2
             platform-tools
 
-      # ------------------------------------------------------------------ #
-      # 4. Android NDK r25c = 25.2.9519653
-      # ------------------------------------------------------------------ #
       - name: Setup Android NDK ${{ env.NDK_VERSION }}
         id: setup-ndk
         uses: nttld/setup-ndk@v1
@@ -67,10 +55,6 @@ jobs:
           echo "ANDROID_NDK_HOME   : $ANDROID_NDK_HOME"
           echo "NDK path (nttld)   : ${{ steps.setup-ndk.outputs.ndk-path }}"
 
-      # ------------------------------------------------------------------ #
-      # 5. Build dependencies
-      #    webkit2gtk-4.0 is pre-installed on ubuntu-22.04.
-      # ------------------------------------------------------------------ #
       - name: Install Build Dependencies
         run: |
           sudo apt-get update -q
@@ -81,9 +65,6 @@ jobs:
             libfreetype6 libcurl4 \
             xvfb
 
-      # ------------------------------------------------------------------ #
-      # 6. JUCE Framework — pinned to stable release
-      # ------------------------------------------------------------------ #
       - name: Checkout JUCE Framework
         uses: actions/checkout@v4
         with:
@@ -92,9 +73,6 @@ jobs:
           fetch-depth: 1
           path: JUCE
 
-      # ------------------------------------------------------------------ #
-      # 7. Cmajor CLI
-      # ------------------------------------------------------------------ #
       - name: Download and Install Cmajor CLI
         run: |
           ARCH=$(uname -m)
@@ -120,26 +98,9 @@ jobs:
           cmaj --version
           echo "Cmajor CLI is working."
 
-      # ------------------------------------------------------------------ #
-      # 8. Generate JUCE project from the Cmajor patch
-      # ------------------------------------------------------------------ #
       - name: Generate JUCE Project from Cmajor Patch
         run: |
           echo "=== Generating JUCE project ==="
-
-          # ------------------------------------------------------------------
-          # Cmajor's CLI pulls in JUCE/CHOC which can briefly spin up a GTK
-          # main loop (for WebView probing).  On GitHub's headless runner this
-          # causes the GTK-CRITICAL 'main_loops != NULL' warning AND can hang
-          # the CLI indefinitely if the assertion happens before the main
-          # loop starts.  Mitigations:
-          #   1. xvfb-run: provides a virtual X display so any GUI init
-          #      succeeds and returns cleanly.
-          #   2. GDK_BACKEND=offscreen: belt-and-braces — any GDK code paths
-          #      that still run avoid needing a real display.
-          #   3. timeout 180: hard-fail after 3 minutes rather than hanging
-          #      for the full 6-hour job timeout.
-          # ------------------------------------------------------------------
           set +e
           GDK_BACKEND=offscreen \
           timeout --kill-after=10 180 \
@@ -154,13 +115,11 @@ jobs:
           echo "cmaj generate exit code: ${GEN_RC}"
           if [ "${GEN_RC}" = "124" ]; then
             echo "ERROR: cmaj generate HUNG — killed by timeout after 180s."
-            echo "This usually means Cmajor CLI is stuck initialising a GUI."
             exit 1
           fi
 
           if [ ! -d "GeneratedApp" ]; then
             echo "ERROR: GeneratedApp directory was not created."
-            echo "=== cmaj-generate.log ==="
             cat cmaj-generate.log
             exit 1
           fi
@@ -172,30 +131,23 @@ jobs:
         run: |
           head -80 GeneratedApp/CMakeLists.txt || echo "CMakeLists.txt not found"
 
-      # ------------------------------------------------------------------ #
-      # 9. Android project structure
-      # ------------------------------------------------------------------ #
       - name: Create Android Studio Project Structure
         run: |
           mkdir -p AndroidProject/app/src/main/cpp
-          # NOTE: the Java package path MUST match the applicationId
-          # (com.subfigames.logicalchaos.melodymachine) — if it's off by
-          # one segment, AndroidManifest's `.MainActivity` resolves to a
-          # class that doesn't exist and the app crashes on launch with
-          # ClassNotFoundException.
           mkdir -p AndroidProject/app/src/main/java/com/subfigames/logicalchaos/melodymachine
           mkdir -p AndroidProject/app/src/main/res/values
           mkdir -p AndroidProject/app/src/main/assets
 
-          # Copy generated JUCE/Cmajor C++ code
           cp -r GeneratedApp/* AndroidProject/app/src/main/cpp/
 
-          # Copy the JNI bridge that drives the audio engine from Java.
           cp .github/android-templates/android_bridge.cpp \
              AndroidProject/app/src/main/cpp/android_bridge.cpp
 
-          # Build an Android-safe index.html with view.js inlined.
-          # Android WebView file:// blocks dynamic import/fetch in many configs.
+          # Shared professional engine core. This is intentionally outside
+          # generated JUCE/Cmajor so Android + future VST3 builds can reuse it.
+          cp src/LogicalChaosEngine.h   AndroidProject/app/src/main/cpp/LogicalChaosEngine.h
+          cp src/LogicalChaosEngine.cpp AndroidProject/app/src/main/cpp/LogicalChaosEngine.cpp
+
           python3 - <<'PYINLINE'
           from pathlib import Path
           template = Path('AndroidProject/app/src/main/assets/index.template.html')
@@ -211,38 +163,15 @@ jobs:
           PYINLINE
 
           echo "C++ source files:"
-          find AndroidProject/app/src/main/cpp -maxdepth 2 -type f | head -20
+          find AndroidProject/app/src/main/cpp -maxdepth 2 -type f | head -30
           echo "Assets:"
           ls -la AndroidProject/app/src/main/assets/
 
-      # ------------------------------------------------------------------ #
-      # 10. Patch CHOC headers for Android
-      #
-      # The Cmajor JUCE target uses CHOC's WebView/MessageLoop which
-      # hard-errors on Android (CHOC detects __linux__ from the NDK target
-      # triple "aarch64-linux-android" and tries to use X11/GTK code that
-      # doesn't exist on Android).
-      #
-      # patch_android.py wraps the original file content in
-      #   #else  // not Android
-      # and injects no-op Android stubs above it, so:
-      #   - Android: gets clean stubs (no CHOC UI, but audio works)
-      #   - Desktop: gets the original CHOC implementation unchanged
-      # ------------------------------------------------------------------ #
       - name: Patch CHOC Headers for Android
         run: |
           python3 .github/scripts/patch_android.py \
             AndroidProject/app/src/main/cpp
 
-      # ------------------------------------------------------------------ #
-      # 10b. Wire our JNI bridge into the generated CMakeLists.txt.
-      #
-      # The Cmajor JUCE export creates a JUCE plugin target (e.g.
-      # LogicalChaosMelodyMachine) with _Standalone, _VST3 etc. sub-targets.
-      # On Android only Standalone is meaningful.  We append android_bridge.cpp
-      # to the Standalone target so our JNI symbols end up in the same .so
-      # that MainActivity loads (lib<APP>_Standalone.so).
-      # ------------------------------------------------------------------ #
       - name: Patch CMakeLists.txt to include Android JNI bridge
         run: |
           CMK="AndroidProject/app/src/main/cpp/CMakeLists.txt"
@@ -250,8 +179,6 @@ jobs:
           if [ ! -f "$CMK" ]; then echo "ERROR: $CMK not found"; exit 1; fi
           if [ ! -f "$TPL" ]; then echo "ERROR: $TPL not found"; exit 1; fi
 
-          # Detect the JUCE target name from the generated CMakeLists.  Cmajor's
-          # JUCE export calls juce_add_plugin(<TARGET> ...).
           JUCE_TARGET=$(grep -oE 'juce_add_plugin\s*\(\s*[A-Za-z_][A-Za-z0-9_]*' "$CMK" \
                         | head -1 | awk -F'[(]' '{print $2}' | tr -d ' ')
           if [ -z "$JUCE_TARGET" ]; then
@@ -260,12 +187,8 @@ jobs:
           fi
           echo "Detected JUCE target: $JUCE_TARGET"
 
-          # Substitute @JUCE_TARGET@ and append.
           sed "s/@JUCE_TARGET@/${JUCE_TARGET}/g" "$TPL" >> "$CMK"
 
-          # Hardening for GitHub runner linker toolchain:
-          # - Some generated configs force gold + thinlto, which fails on runner
-          #   due missing LLVMgold plugin. Normalize to lld and strip thinlto.
           python3 - <<'PY'
           from pathlib import Path
           cmk = Path("AndroidProject/app/src/main/cpp/CMakeLists.txt")
@@ -281,9 +204,6 @@ jobs:
           echo "CMakeLists.txt now ends with:"
           tail -25 "$CMK"
 
-      # ------------------------------------------------------------------ #
-      # 11. Copy Gradle build files from templates stored in the repo
-      # ------------------------------------------------------------------ #
       - name: Copy Gradle Build Files
         run: |
           TPLS="${{ github.workspace }}/.github/android-templates"
@@ -294,10 +214,6 @@ jobs:
           cp "$TPLS/gradle.properties"   AndroidProject/gradle.properties
           cp "$TPLS/AndroidManifest.xml" AndroidProject/app/src/main/AndroidManifest.xml
           cp "$TPLS/strings.xml"         AndroidProject/app/src/main/res/values/strings.xml
-
-          # MainActivity: required by the <activity android:name=".MainActivity"/>
-          # declaration in AndroidManifest.xml.  Without this, Android throws
-          # ClassNotFoundException on launch and the app crashes instantly.
           cp "$TPLS/MainActivity.java" \
              AndroidProject/app/src/main/java/com/subfigames/logicalchaos/melodymachine/MainActivity.java
 
@@ -307,9 +223,6 @@ jobs:
           find AndroidProject -name "*.gradle" -o -name "gradle.properties" \
                -o -name "AndroidManifest.xml" -o -name "MainActivity.java" | sort
 
-      # ------------------------------------------------------------------ #
-      # 12. Install Gradle & create wrapper
-      # ------------------------------------------------------------------ #
       - name: Install Gradle 8.4
         run: |
           wget -q https://services.gradle.org/distributions/gradle-8.4-bin.zip -O gradle.zip
@@ -323,17 +236,9 @@ jobs:
           gradle wrapper --gradle-version 8.4
           chmod +x gradlew
 
-      # ------------------------------------------------------------------ #
-      # 13. Build APKs (debug + release)
-      # ------------------------------------------------------------------ #
       - name: Build Debug and Release APKs
         run: |
           cd AndroidProject
-
-          # pipefail: make the pipeline fail if Gradle fails, not just if tee fails.
-          # Without this, `cmd | tee` always exits 0 (tee's exit code) even when
-          # Gradle/CMake reports an error — the APK is never built but the step
-          # appeared green.
           set -o pipefail
 
           ./gradlew assembleDebug \
@@ -341,7 +246,6 @@ jobs:
             --no-daemon \
             2>&1 | tee ../gradle-build.log
 
-          # Release is best-effort for now (debug APK remains the guaranteed output).
           set +e
           ./gradlew assembleRelease \
             --stacktrace \
@@ -353,13 +257,11 @@ jobs:
             echo "WARN: assembleRelease failed; continuing with debug artifact." | tee -a ../gradle-build.log
           fi
 
-          # Explicit guard: debug APK must exist.
           DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
           RELEASE_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
 
           if [ ! -f "$DEBUG_APK" ]; then
             echo "ERROR: Debug APK not found at $DEBUG_APK"
-            echo "Check the gradle-build.log artifact for the real failure."
             exit 1
           fi
 
@@ -379,9 +281,6 @@ jobs:
           echo "=== All APK files ==="
           find . -name "*.apk" -type f -ls 2>/dev/null || echo "No APK files found."
 
-      # ------------------------------------------------------------------ #
-      # 13. Upload artifacts
-      # ------------------------------------------------------------------ #
       - name: Upload Debug APK Artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -408,9 +307,6 @@ jobs:
             gradle-build.log
           if-no-files-found: ignore
 
-      # ------------------------------------------------------------------ #
-      # 14. Build summary
-      # ------------------------------------------------------------------ #
       - name: Write Build Summary
         if: always()
         run: |
@@ -430,13 +326,11 @@ jobs:
               DEBUG_SZ=$(du -h "$DEBUG_APK" | cut -f1)
               RELEASE_SZ=$(du -h "$RELEASE_APK" | cut -f1)
               echo "**Status:** Build Successful"
-              echo ""
               echo "Debug APK size: $DEBUG_SZ"
               echo "Release APK size: $RELEASE_SZ"
             elif [ -f "$DEBUG_APK" ]; then
               DEBUG_SZ=$(du -h "$DEBUG_APK" | cut -f1)
               echo "**Status:** Debug build successful (release build not produced in this run)"
-              echo ""
               echo "Debug APK size: $DEBUG_SZ"
             else
               echo "**Status:** Debug APK missing — check build-logs artifact"
