@@ -3,6 +3,10 @@ package com.subfigames.logicalchaos.melodymachine;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.graphics.Color;
+import android.media.midi.MidiDevice;
+import android.media.midi.MidiDeviceInfo;
+import android.media.midi.MidiInputPort;
+import android.media.midi.MidiManager;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Gravity;
@@ -68,6 +72,16 @@ public class MainActivity extends Activity
     private boolean audioRunning    = false;
     private WebView webView         = null;
 
+    // Android MIDI output state.
+    // To send MIDI out from the app, we open an INPUT port on the external MIDI device.
+    private final Object midiLock   = new Object();
+    private MidiManager midiManager = null;
+    private MidiDevice  midiDevice  = null;
+    private MidiInputPort midiOutPort = null;
+    private String midiStatus       = "MIDI not initialised";
+    private boolean midiEnabled     = false;
+    private int midiChannel         = 0;   // 0 = MIDI channel 1
+    private int midiVelocity        = 96;
     // --- Native methods (android_bridge.cpp) --------------------------------
     private native void   nativeSetCrashLogPath (String crashPath, String progressPath);
     private native String nativeStart();                         // create engine
@@ -120,6 +134,10 @@ public class MainActivity extends Activity
             Log.w (TAG, "nativeSetCrashLogPath threw — continuing", t);
         }
 
+        // Prepare Android MIDI support. This does not open audio and should not
+        // prevent the app from starting on devices without MIDI support.
+        initMidi();
+
         // Do not create the audio engine during Activity startup.
         // Engine creation happens lazily from AndroidHost.startAudio(), which
         // gives better diagnostics and avoids blocking or crashing the UI path.
@@ -131,13 +149,218 @@ public class MainActivity extends Activity
     {
         try
         {
+            closeMidi();
             if (audioRunning)  nativeStopAudio();
             if (engineCreated) nativeStop();
         }
         catch (Throwable t) { Log.e (TAG, "engine teardown failed", t); }
         super.onDestroy();
     }
+    //------------------------------------------------------------------------
+    // Android MIDI output
+    //------------------------------------------------------------------------
+    private void initMidi()
+    {
+        try
+        {
+            midiManager = (MidiManager) getSystemService (MIDI_SERVICE);
 
+            if (midiManager == null)
+            {
+                midiStatus = "Android MIDI service unavailable";
+                Log.w (TAG, midiStatus);
+                return;
+            }
+
+            midiStatus = "MIDI ready. No output selected.";
+            Log.i (TAG, midiStatus);
+        }
+        catch (Throwable t)
+        {
+            midiStatus = "MIDI init failed: " + t.getMessage();
+            Log.e (TAG, midiStatus, t);
+        }
+    }
+
+    private String refreshMidiOutput()
+    {
+        synchronized (midiLock)
+        {
+            try
+            {
+                if (midiManager == null)
+                {
+                    midiStatus = "Android MIDI service unavailable";
+                    return midiStatus;
+                }
+
+                closeMidiLocked();
+
+                MidiDeviceInfo[] devices = midiManager.getDevices();
+
+                for (MidiDeviceInfo info : devices)
+                {
+                    MidiDeviceInfo.PortInfo[] ports = info.getPorts();
+
+                    for (MidiDeviceInfo.PortInfo port : ports)
+                    {
+                        // TYPE_INPUT means an input to the external MIDI device.
+                        // This is the port our app writes into when sending MIDI out.
+                        if (port.getType() == MidiDeviceInfo.PortInfo.TYPE_INPUT)
+                        {
+                            final MidiDeviceInfo selectedInfo = info;
+                            final int selectedPort = port.getPortNumber();
+                            final String selectedName = describeMidiDevice (info) + " port " + selectedPort;
+
+                            midiStatus = "Opening MIDI output: " + selectedName;
+                            Log.i (TAG, midiStatus);
+
+                            midiManager.openDevice (selectedInfo, device ->
+                            {
+                                synchronized (midiLock)
+                                {
+                                    if (device == null)
+                                    {
+                                        midiStatus = "Could not open MIDI device: " + selectedName;
+                                        Log.w (TAG, midiStatus);
+                                        return;
+                                    }
+
+                                    MidiInputPort inputPort = device.openInputPort (selectedPort);
+
+                                    if (inputPort == null)
+                                    {
+                                        try { device.close(); } catch (Throwable ignored) {}
+                                        midiStatus = "Could not open MIDI input port on: " + selectedName;
+                                        Log.w (TAG, midiStatus);
+                                        return;
+                                    }
+
+                                    midiDevice = device;
+                                    midiOutPort = inputPort;
+                                    midiStatus = "MIDI output open: " + selectedName;
+                                    Log.i (TAG, midiStatus);
+                                }
+                            }, null);
+
+                            return midiStatus;
+                        }
+                    }
+                }
+
+                midiStatus = "No MIDI output devices found";
+                Log.i (TAG, midiStatus);
+                return midiStatus;
+            }
+            catch (Throwable t)
+            {
+                midiStatus = "MIDI refresh failed: " + t.getMessage();
+                Log.e (TAG, midiStatus, t);
+                return midiStatus;
+            }
+        }
+    }
+
+    private String describeMidiDevice (MidiDeviceInfo info)
+    {
+        if (info == null)
+            return "Unknown MIDI device";
+
+        Bundle props = info.getProperties();
+
+        String name = props.getString (MidiDeviceInfo.PROPERTY_NAME);
+        if (name != null && ! name.isEmpty())
+            return name;
+
+        String manufacturer = props.getString (MidiDeviceInfo.PROPERTY_MANUFACTURER);
+        String product = props.getString (MidiDeviceInfo.PROPERTY_PRODUCT);
+
+        if (manufacturer != null && product != null)
+            return manufacturer + " " + product;
+
+        if (product != null)
+            return product;
+
+        return "MIDI device " + info.getId();
+    }
+
+    private void closeMidi()
+    {
+        synchronized (midiLock)
+        {
+            closeMidiLocked();
+        }
+    }
+
+    private void closeMidiLocked()
+    {
+        try
+        {
+            if (midiOutPort != null)
+            {
+                midiOutPort.close();
+                midiOutPort = null;
+            }
+        }
+        catch (Throwable t) { Log.w (TAG, "closing MIDI port failed", t); }
+
+        try
+        {
+            if (midiDevice != null)
+            {
+                midiDevice.close();
+                midiDevice = null;
+            }
+        }
+        catch (Throwable t) { Log.w (TAG, "closing MIDI device failed", t); }
+
+        midiEnabled = false;
+    }
+
+    private void sendMidiNoteOn (int note, int velocity)
+    {
+        sendMidiMessage (0x90 | (midiChannel & 0x0f),
+                         clampMidi7 (note),
+                         clampMidi7 (velocity));
+    }
+
+    private void sendMidiNoteOff (int note)
+    {
+        sendMidiMessage (0x80 | (midiChannel & 0x0f),
+                         clampMidi7 (note),
+                         0);
+    }
+
+    private void sendMidiMessage (int status, int data1, int data2)
+    {
+        synchronized (midiLock)
+        {
+            if (! midiEnabled || midiOutPort == null)
+                return;
+
+            try
+            {
+                byte[] msg = new byte[]
+                {
+                    (byte) (status & 0xff),
+                    (byte) (data1  & 0x7f),
+                    (byte) (data2  & 0x7f)
+                };
+
+                midiOutPort.send (msg, 0, msg.length);
+            }
+            catch (Throwable t)
+            {
+                midiStatus = "MIDI send failed: " + t.getMessage();
+                Log.e (TAG, midiStatus, t);
+            }
+        }
+    }
+
+    private static int clampMidi7 (int value)
+    {
+        return Math.max (0, Math.min (127, value));
+    }
     //------------------------------------------------------------------------
     // Java crash plumbing
     //------------------------------------------------------------------------
@@ -351,7 +574,68 @@ public class MainActivity extends Activity
                  + "; engine=" + (engineCreated ? "ready" : "not-created")
                  + "; audio="  + (audioRunning  ? "running" : "stopped");
         }
+        @JavascriptInterface
+        public String getMidiStatus()
+        {
+            synchronized (midiLock)
+            {
+                return midiStatus
+                     + "; enabled=" + midiEnabled
+                     + "; channel=" + (midiChannel + 1)
+                     + "; velocity=" + midiVelocity;
+            }
+        }
 
+        @JavascriptInterface
+        public String refreshMidiDevices()
+        {
+            return refreshMidiOutput();
+        }
+
+        @JavascriptInterface
+        public void setMidiEnabled (boolean enabled)
+        {
+            synchronized (midiLock)
+            {
+                midiEnabled = enabled && midiOutPort != null;
+
+                if (enabled && midiOutPort == null)
+                    midiStatus = "MIDI cannot enable: no output port open";
+
+                if (! enabled)
+                    midiStatus = "MIDI disabled";
+            }
+        }
+
+        @JavascriptInterface
+        public void setMidiChannel (int channel)
+        {
+            synchronized (midiLock)
+            {
+                midiChannel = Math.max (0, Math.min (15, channel - 1));
+            }
+        }
+
+        @JavascriptInterface
+        public void setMidiVelocity (int velocity)
+        {
+            synchronized (midiLock)
+            {
+                midiVelocity = clampMidi7 (velocity);
+            }
+        }
+
+        @JavascriptInterface
+        public void sendMidiNoteOn (int note)
+        {
+            sendMidiNoteOn (note, midiVelocity);
+        }
+
+        @JavascriptInterface
+        public void sendMidiNoteOff (int note)
+        {
+            sendMidiNoteOff (note);
+        }
         // Combined "create + start" used by the WebView's Start Audio button.
         // Returns "" on success or an error string the JS can show.
         @JavascriptInterface
