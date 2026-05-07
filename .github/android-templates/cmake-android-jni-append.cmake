@@ -12,11 +12,14 @@ if(ANDROID)
     foreach(_cand IN LISTS _JNI_CANDIDATES)
         if(TARGET ${_cand})
             target_sources(${_cand} PRIVATE
-                "${CMAKE_CURRENT_SOURCE_DIR}/android_bridge.cpp")
+                "${CMAKE_CURRENT_SOURCE_DIR}/android_bridge.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/LogicalChaosEngine.cpp")
+            target_include_directories(${_cand} PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}")
             set_property(TARGET ${_cand} PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
             target_link_options(${_cand} PRIVATE -fuse-ld=lld)
             target_link_libraries(${_cand} PRIVATE log android)
-            message(STATUS "Android JNI bridge attached to target: ${_cand}")
+            message(STATUS "Android JNI bridge/shared engine attached to target: ${_cand}")
             set(_JNI_ATTACHED TRUE)
         endif()
     endforeach()
