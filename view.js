@@ -708,7 +708,11 @@ export default function createPatchView (patchConnection)
 
     // ----- Transport / Pattern controls -----
     $('btnGenerate').addEventListener ('click', () => send ('generate', 1));
-    $('btnMutate').addEventListener   ('click', () => send ('mutate', 1));
+    $('btnMutate').addEventListener ('click', () =>
+    {
+        send ('mutate', 1);
+        setTimeout (() => send ('requestPatternDump', 1), 80);
+    });
     $('btnPlay').addEventListener ('click', () => send ('play', 1));
     $('btnStop').addEventListener ('click', () =>
     {
