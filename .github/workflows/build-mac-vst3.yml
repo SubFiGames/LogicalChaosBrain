@@ -42,16 +42,20 @@ jobs:
           cmake \
             -S vst3 \
             -B build-vst3 \
-            -GXcode \
+            -G "Unix Makefiles" \
             -DVST3_SDK_ROOT="$GITHUB_WORKSPACE/tools/vst3sdk" \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY=""
 
       - name: Build fallback VST3
         shell: bash
         run: |
           set -e
-          cmake --build build-vst3 --config Release --parallel
+          cmake --build build-vst3 --parallel
 
       - name: Collect VST3
         shell: bash
@@ -67,15 +71,18 @@ jobs:
 
           if [ -z "$VST3_PATH" ]; then
             echo "No VST3 was built."
-            find build-vst3 -maxdepth 6 -print | head -600
+            find build-vst3 -maxdepth 8 -print | head -800
             exit 1
           fi
 
           echo "Found VST3: $VST3_PATH"
           cp -R "$VST3_PATH" artifact/
 
-          echo "Ad-hoc signing VST3..."
-          codesign --force --deep --sign - artifact/*.vst3 || true
+          echo "Ad-hoc signing VST3 bundle..."
+          codesign --force --deep --sign - "artifact/$(basename "$VST3_PATH")"
+
+          echo "Verifying ad-hoc signature..."
+          codesign --verify --deep --strict --verbose=2 "artifact/$(basename "$VST3_PATH")"
 
           echo "Artifact contents:"
           find artifact -maxdepth 5 -print
