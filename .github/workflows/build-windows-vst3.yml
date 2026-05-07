@@ -53,7 +53,8 @@ jobs:
             -B build-vst3 `
             -G "Visual Studio 17 2022" `
             -A x64 `
-            -DVST3_SDK_ROOT="$env:GITHUB_WORKSPACE\tools\vst3sdk"
+            -DVST3_SDK_ROOT="$env:GITHUB_WORKSPACE\tools\vst3sdk" `
+            *>&1 | Tee-Object -FilePath configure-windows-vst3.log
 
           if ($LASTEXITCODE -ne 0) {
             Write-Error "CMake configure failed with exit code $LASTEXITCODE"
@@ -63,14 +64,25 @@ jobs:
       - name: Build fallback VST3
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
+          $ErrorActionPreference = 'Continue'
 
-          cmake --build build-vst3 --config Release --parallel
+          cmake --build build-vst3 --config Release --parallel *>&1 |
+            Tee-Object -FilePath build-windows-vst3.log
 
           if ($LASTEXITCODE -ne 0) {
             Write-Error "CMake build failed with exit code $LASTEXITCODE"
             exit 1
           }
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LogicalChaos-Windows-VST3-Logs
+          path: |
+            configure-windows-vst3.log
+            build-windows-vst3.log
+          if-no-files-found: ignore
 
       - name: Collect VST3
         shell: pwsh
