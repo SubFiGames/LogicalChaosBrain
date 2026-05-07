@@ -5,7 +5,7 @@ export default function createPatchView (patchConnection)
 
     // ----- State -----
     const state = {
-        steps: Array.from ({ length: 32 }, () => ({ note: 48, active: 0, glide: 0, randomise: 0 })),
+        steps: Array.from ({ length: 64 }, () => ({ note: 48, active: 0, glide: 0, randomise: 0 })),
         length: 16,
         selectedStep: 0,
         playingStep: -1,
@@ -392,17 +392,21 @@ export default function createPatchView (patchConnection)
                             <option value="20">20</option>
                             <option value="24">24</option>
                             <option value="32">32</option>
+                            <option value="48">48</option>
+                            <option value="64">64</option>
                         </select>
                     </label>
                     <label>Time Sig
                         <select id="timeSignature">
-                            <option value="4/4/16" selected>4/4 - 16 steps</option>
-                            <option value="3/4/12">3/4 - 12 steps</option>
-                            <option value="5/4/20">5/4 - 20 steps</option>
-                            <option value="6/8/12">6/8 - 12 steps</option>
-                            <option value="7/8/14">7/8 - 14 steps</option>
-                            <option value="9/8/18">9/8 - 18 steps</option>
-                            <option value="12/8/24">12/8 - 24 steps</option>
+                            <option value="4/4/16" selected>4/4</option>
+                            <option value="2/4/8">2/4</option>
+                            <option value="3/4/12">3/4</option>
+                            <option value="5/4/20">5/4</option>
+                            <option value="6/4/24">6/4</option>
+                            <option value="6/8/12">6/8</option>
+                            <option value="7/8/14">7/8</option>
+                            <option value="9/8/18">9/8</option>
+                            <option value="12/8/24">12/8</option>
                         </select>
                     </label>
                     <label>Root Note
@@ -891,7 +895,7 @@ export default function createPatchView (patchConnection)
 
     function setPlayingStep (stepIndex)
     {
-        const nextStep = clampInt (stepIndex, -1, 31);
+        const nextStep = clampInt (stepIndex, -1, 63);
 
         if (state.playingStep === nextStep)
             return;
@@ -1021,7 +1025,7 @@ export default function createPatchView (patchConnection)
         send ('clearPattern', 1);
         setPlayingStep (-1);
 
-        for (let i = 0; i < 32; ++i)
+        for (let i = 0; i < 64; ++i)
             state.steps[i] = { note: 48, active: 0, glide: 0, randomise: 0 };
 
         drawGrid ();
@@ -1031,7 +1035,7 @@ export default function createPatchView (patchConnection)
 
     $('patternLength').addEventListener ('change', (e) =>
     {
-        state.length = clampInt (e.target.value, 8, 32);
+        state.length = clampInt (e.target.value, 8, 64);
         send ('patternLength', state.length);
     
         if (state.selectedStep >= state.length)
@@ -1135,11 +1139,11 @@ export default function createPatchView (patchConnection)
             {
                 // Playback position update.
                 // Route through setPlayingStep so the MIDI output follows the sequencer.
-                setPlayingStep ((stepIndex >= 32) ? -1 : stepIndex);
+                setPlayingStep ((stepIndex >= 64) ? -1 : stepIndex);
                 return;
             }
 
-            if (kind === 2 && stepIndex >= 0 && stepIndex < 32)
+            if (kind === 2 && stepIndex >= 0 && stepIndex < 64)
             {
                 // Step data update
                 state.steps[stepIndex].note      = (value >> 13) & 127;
