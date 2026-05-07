@@ -223,6 +223,51 @@ export default function createPatchView (patchConnection)
                 color: rgba(217,255,247,0.42);
                 letter-spacing: 0.06em;
             }
+                        .midi-panel {
+                display: grid;
+                grid-template-columns: repeat(5, minmax(110px, 1fr));
+                gap: 10px;
+                align-items: end;
+            }
+
+            .status-pill {
+                grid-column: 1 / -1;
+                min-height: 34px;
+                display: flex;
+                align-items: center;
+                padding: 8px 10px;
+                border-radius: 10px;
+                border: 1px solid rgba(0,255,204,0.18);
+                background: rgba(0,0,0,0.20);
+                color: rgba(217,255,247,0.72);
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 0.04em;
+                text-transform: none;
+                overflow-wrap: anywhere;
+            }
+
+            .check-row {
+                min-height: 36px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 0 9px;
+                border-radius: 9px;
+                border: 1px solid rgba(0,255,204,0.22);
+                background: rgba(0,0,0,0.25);
+            }
+
+            .check-row input {
+                min-height: 0;
+                width: 18px;
+                height: 18px;
+                accent-color: #00ffcc;
+            }
+
+            @media (max-width: 900px) {
+                .midi-panel { grid-template-columns: repeat(2, minmax(110px, 1fr)); }
+            }
             /* ---- Step Grid ---- */
             .grid {
                 display: grid;
@@ -338,6 +383,17 @@ export default function createPatchView (patchConnection)
                             <option value="16" selected>16</option>
                             <option value="24">24</option>
                             <option value="32">32</option>
+                        </select>
+                    </label>
+                    <label>Time Sig
+                        <select id="timeSignature">
+                            <option value="4/4/16" selected>4/4 - 16 steps</option>
+                            <option value="3/4/12">3/4 - 12 steps</option>
+                            <option value="5/4/20">5/4 - 20 steps</option>
+                            <option value="6/8/12">6/8 - 12 steps</option>
+                            <option value="7/8/14">7/8 - 14 steps</option>
+                            <option value="9/8/18">9/8 - 18 steps</option>
+                            <option value="12/8/24">12/8 - 24 steps</option>
                         </select>
                     </label>
                     <label>Root Note
@@ -498,7 +554,50 @@ export default function createPatchView (patchConnection)
                     </label>
                 </div>
             </div>
+            <div class="panel">
+                <div class="editor-header" style="margin-bottom: 10px;">
+                    <h3>MIDI Output</h3>
+                </div>
 
+                <div class="midi-panel">
+                    <button id="btnMidiRefresh" class="btn-secondary">REFRESH MIDI</button>
+                    <button id="btnMidiTest" class="btn-secondary">TEST C3</button>
+
+                    <label>MIDI Send
+                        <span class="check-row">
+                            <input id="midiEnabled" type="checkbox">
+                            <span>Enabled</span>
+                        </span>
+                    </label>
+
+                    <label>Channel
+                        <select id="midiChannel">
+                            <option value="1" selected>1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                            <option value="5">5</option>
+                            <option value="6">6</option>
+                            <option value="7">7</option>
+                            <option value="8">8</option>
+                            <option value="9">9</option>
+                            <option value="10">10</option>
+                            <option value="11">11</option>
+                            <option value="12">12</option>
+                            <option value="13">13</option>
+                            <option value="14">14</option>
+                            <option value="15">15</option>
+                            <option value="16">16</option>
+                        </select>
+                    </label>
+
+                    <label>Velocity
+                        <input id="midiVelocity" type="range" min="1" max="127" value="96">
+                    </label>
+
+                    <div id="midiStatus" class="status-pill">MIDI status: not checked yet.</div>
+                </div>
+            </div>
             <div class="panel">
                 <div id="grid" class="grid"></div>
             </div>
@@ -609,6 +708,104 @@ export default function createPatchView (patchConnection)
 
     const tempoKnob = setupKnob ('tempoKnob', 'tempo', (v) => `${Math.round (v)} BPM`);
     const masterVolumeKnob = setupKnob ('masterVolumeKnob', 'masterVolume', (v) => `${Math.round (v)}%`);
+        // ----- Android MIDI helpers -----
+    const getAndroidHost = () => window.AndroidHost || null;
+
+    function setMidiStatus (text)
+    {
+        const el = $('midiStatus');
+        if (el)
+            el.textContent = 'MIDI status: ' + (text || 'unknown');
+    }
+
+    function refreshMidiStatus ()
+    {
+        const host = getAndroidHost();
+
+        if (! host || ! host.getMidiStatus)
+        {
+            setMidiStatus ('AndroidHost MIDI bridge not available in this environment.');
+            return;
+        }
+
+        try
+        {
+            setMidiStatus (host.getMidiStatus());
+        }
+        catch (e)
+        {
+            setMidiStatus ('getMidiStatus failed: ' + e);
+        }
+    }
+
+    function refreshMidiDevices ()
+    {
+        const host = getAndroidHost();
+
+        if (! host || ! host.refreshMidiDevices)
+        {
+            setMidiStatus ('AndroidHost MIDI bridge not available.');
+            return;
+        }
+
+        try
+        {
+            setMidiStatus (host.refreshMidiDevices());
+
+            // Opening the MIDI device is asynchronous on Android, so ask for
+            // the status again shortly after the callback has had time to run.
+            setTimeout (refreshMidiStatus, 300);
+        }
+        catch (e)
+        {
+            setMidiStatus ('refreshMidiDevices failed: ' + e);
+        }
+    }
+
+    function setMidiEnabledFromUI ()
+    {
+        const host = getAndroidHost();
+        const enabled = $('midiEnabled').checked;
+
+        if (! host || ! host.setMidiEnabled)
+        {
+            setMidiStatus ('AndroidHost MIDI bridge not available.');
+            return;
+        }
+
+        try
+        {
+            host.setMidiEnabled (enabled);
+            refreshMidiStatus ();
+        }
+        catch (e)
+        {
+            setMidiStatus ('setMidiEnabled failed: ' + e);
+        }
+    }
+
+    function sendMidiTestNote ()
+    {
+        const host = getAndroidHost();
+
+        if (! host || ! host.sendMidiNoteOn || ! host.sendMidiNoteOff)
+        {
+            setMidiStatus ('AndroidHost MIDI bridge not available.');
+            return;
+        }
+
+        try
+        {
+            const note = 48; // C3, same as the app default root note.
+            host.sendMidiNoteOn (note);
+            setTimeout (() => host.sendMidiNoteOff (note), 240);
+            refreshMidiStatus ();
+        }
+        catch (e)
+        {
+            setMidiStatus ('MIDI test note failed: ' + e);
+        }
+    }
     // ----- drawGrid -----
     function drawGrid ()
     {
@@ -732,7 +929,26 @@ export default function createPatchView (patchConnection)
             state.selectedStep = state.length - 1;
         drawGrid (); drawEditor ();
     });
+    $('timeSignature').addEventListener ('change', (e) =>
+    {
+        const parts = String (e.target.value).split ('/');
+        const numerator = clampInt (parts[0], 2, 12);
+        const denominator = clampInt (parts[1], 4, 8);
+        const steps = clampInt (parts[2], 8, 32);
 
+        send ('timeSigNumerator', numerator);
+        send ('timeSigDenominator', denominator);
+
+        state.length = steps;
+        $('patternLength').value = String (steps);
+        send ('patternLength', steps);
+
+        if (state.selectedStep >= state.length)
+            state.selectedStep = state.length - 1;
+
+        drawGrid ();
+        drawEditor ();
+    });
     $('rootNote').addEventListener ('change', (e) =>
     {
         const v = clampInt (e.target.value, 36, 72);
@@ -754,6 +970,43 @@ export default function createPatchView (patchConnection)
     $('synthRes').addEventListener     ('input', (e) => send ('synthRes',     Number (e.target.value)));
     $('synthEnvMod').addEventListener  ('input', (e) => send ('synthEnvMod',  Number (e.target.value)));
     $('synthDecay').addEventListener   ('input', (e) => send ('synthDecay',   Number (e.target.value)));
+    $('btnMidiRefresh').addEventListener ('click', refreshMidiDevices);
+    $('btnMidiTest').addEventListener    ('click', sendMidiTestNote);
+
+    $('midiEnabled').addEventListener ('change', setMidiEnabledFromUI);
+
+    $('midiChannel').addEventListener ('change', (e) =>
+    {
+        const host = getAndroidHost();
+        if (host && host.setMidiChannel)
+        {
+            try
+            {
+                host.setMidiChannel (clampInt (e.target.value, 1, 16));
+                refreshMidiStatus ();
+            }
+            catch (err)
+            {
+                setMidiStatus ('setMidiChannel failed: ' + err);
+            }
+        }
+    });
+
+    $('midiVelocity').addEventListener ('input', (e) =>
+    {
+        const host = getAndroidHost();
+        if (host && host.setMidiVelocity)
+        {
+            try
+            {
+                host.setMidiVelocity (clampInt (e.target.value, 1, 127));
+            }
+            catch (err)
+            {
+                setMidiStatus ('setMidiVelocity failed: ' + err);
+            }
+        }
+    });
 
     // ----- patchConnection listener -----
     if (patchConnection && typeof patchConnection.addEndpointListener === 'function')
@@ -791,6 +1044,7 @@ export default function createPatchView (patchConnection)
     drawGrid ();
     drawEditor ();
     setTimeout (() => send ('requestPatternDump', 1), 80);
+    setTimeout (refreshMidiStatus, 120);
 
     return root;
 }
