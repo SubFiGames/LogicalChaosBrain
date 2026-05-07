@@ -625,16 +625,16 @@ public class MainActivity extends Activity
             }
         }
 
-        @JavascriptInterface
+                @JavascriptInterface
         public void sendMidiNoteOn (int note)
         {
-            sendMidiNoteOn (note, midiVelocity);
+            MainActivity.this.sendMidiNoteOn (note, midiVelocity);
         }
 
         @JavascriptInterface
         public void sendMidiNoteOff (int note)
         {
-            sendMidiNoteOff (note);
+            MainActivity.this.sendMidiNoteOff (note);
         }
         // Combined "create + start" used by the WebView's Start Audio button.
         // Returns "" on success or an error string the JS can show.
