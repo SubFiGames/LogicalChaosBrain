@@ -30,6 +30,15 @@ target_include_directories(LogicalChaosFallbackVST3 PRIVATE
     ${VST3_SDK_ROOT}
 )
 
+# Our plugin derives from Steinberg SDK classes such as AudioEffect and
+# EditController. Those classes are declared in headers, but their actual
+# implementations live in SDK libraries, so the plugin bundle must link them.
+target_link_libraries(LogicalChaosFallbackVST3 PRIVATE
+    sdk
+    base
+    pluginterfaces
+)
+
 target_compile_definitions(LogicalChaosFallbackVST3 PRIVATE
     LOGICAL_CHAOS_VERSION="0.1.0"
 )
