@@ -113,8 +113,8 @@
 (function () {
   const host = window.AndroidHost || {};
   const listeners = new Map();  // endpointID -> [fn, ...]
-  const eventEndpoints = new Set ([
-    'generate', 'play', 'stop',
+    const eventEndpoints = new Set ([
+    'generate', 'mutate', 'play', 'stop',
     'setStepPacked', 'requestPatternDump', 'clearPattern'
   ]);
 
