@@ -1108,7 +1108,6 @@ private:
 
     float                                 tempo_           = 120.0f;
     float                                 chaos_           = 35.0f;
-    float                                 mutation_        = 20.0f;
     float                                 density_         = 78.0f;
     float                                 gate_            = 72.0f;
     int                                   patternLength_   = 16;
