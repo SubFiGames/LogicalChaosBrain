@@ -461,7 +461,7 @@ private:
         if (id == "gate")            return normalise (value, 5.0f, 100.0f);
         if (id == "patternLength")   return normalise (value, 8.0f, 32.0f);
         if (id == "rootNote")        return normalise (value, 36.0f, 72.0f);
-
+        if (id == "masterVolume")    return normalise (value, 0.0f, 1.0f);
         if (id == "styleType")       return normalise (value, 0.0f, 9.0f);
         if (id == "scaleType")       return normalise (value, 0.0f, 10.0f);
         if (id == "complexityType")  return normalise (value, 0.0f, 3.0f);
@@ -492,7 +492,7 @@ private:
         if (id == "gate")            { gate_ = juce::jlimit (5.0f, 100.0f, value); return; }
         if (id == "patternLength")   { patternLength_ = clampInt ((int) std::lround (value), 8, 32); return; }
         if (id == "rootNote")        { rootNote_ = clampInt ((int) std::lround (value), 36, 72); return; }
-
+        if (id == "masterVolume")    { masterVolume_ = juce::jlimit (0.0f, 1.0f, value); return; }
         if (id == "styleType")       { styleType_ = clampInt ((int) std::lround (value), 0, 9); return; }
         if (id == "scaleType")       { scaleType_ = clampInt ((int) std::lround (value), 0, 10); return; }
         if (id == "complexityType")  { complexityType_ = clampInt ((int) std::lround (value), 0, 3); return; }
@@ -780,7 +780,83 @@ private:
             stepRandom_[i] = chance (clampInt (randomChance, 0, 40)) ? 1 : 0;
         }
     }
+    void mutateFallbackPattern()
+    {
+        const int len = clampInt (patternLength_, 1, 32);
+        const int amount = clampInt ((int) std::lround (mutation_), 0, 100);
 
+        auto nextSeed = [&]() -> int
+        {
+            seed_ = seed_ * 1103515245 + 12345;
+            return (int) ((seed_ >> 8) & 0x7fffffff);
+        };
+
+        auto chance = [&](int percent) -> bool
+        {
+            percent = clampInt (percent, 0, 100);
+            return (nextSeed() % 100) < percent;
+        };
+
+        const int noteChance   = clampInt (6 + amount / 2, 6, 58);
+        const int activeChance = clampInt (2 + amount / 9, 2, 18);
+        const int glideChance  = clampInt (4 + amount / 5, 4, 28);
+        const int randomChance = clampInt (3 + amount / 6, 3, 22);
+
+        for (int i = 0; i < len; ++i)
+        {
+            // Keep the first step anchored so mutation does not erase the phrase start.
+            if (i == 0)
+            {
+                stepActive_[i] = 1;
+            }
+            else if (chance (activeChance))
+            {
+                stepActive_[i] = stepActive_[i] ? 0 : 1;
+            }
+
+            if (chance (noteChance))
+            {
+                int interval = 0;
+
+                if (amount < 25)
+                {
+                    static const int smallMoves[4] = { -2, -1, 1, 2 };
+                    interval = smallMoves[nextSeed() % 4];
+                }
+                else if (amount < 60)
+                {
+                    static const int mediumMoves[8] = { -5, -3, -2, -1, 1, 2, 3, 5 };
+                    interval = mediumMoves[nextSeed() % 8];
+                }
+                else
+                {
+                    static const int largeMoves[12] = { -12, -7, -5, -3, -2, -1, 1, 2, 3, 5, 7, 12 };
+                    interval = largeMoves[nextSeed() % 12];
+                }
+
+                int nextNote = stepNotes_[i] + interval;
+
+                // Keep the sequence in a useful musical register.
+                while (nextNote < 36) nextNote += 12;
+                while (nextNote > 84) nextNote -= 12;
+
+                stepNotes_[i] = clampInt (nextNote, 0, 127);
+            }
+
+            if (chance (glideChance))
+                stepGlide_[i] = stepGlide_[i] ? 0 : 1;
+
+            if (chance (randomChance))
+                stepRandom_[i] = stepRandom_[i] ? 0 : 1;
+        }
+
+        for (int i = len; i < 32; ++i)
+        {
+            stepActive_[i] = 0;
+            stepGlide_[i] = 0;
+            stepRandom_[i] = 0;
+        }
+    }
     int packStepMessage (int kind, int step) const
     {
         const int s = clampInt (step, 0, 31);
@@ -831,7 +907,11 @@ private:
             queuePatternDump();
             return;
         }
-
+        if (id == "mutate")
+        {
+            mutateFallbackPattern();
+            return;
+        }
         if (id == "clearPattern")
         {
             for (int i = 0; i < 32; ++i) stepActive_[i] = 0;
@@ -948,7 +1028,7 @@ private:
             bp_ += f * hp;
             lp_ += f * bp_;
 
-            const float outSample = lp_ * envLevel_ * 0.5f;
+            const float outSample = lp_ * envLevel_ * 0.5f * masterVolume_;
             out[2 * i] = outSample;
             out[2 * i + 1] = outSample;
         }
@@ -1028,10 +1108,12 @@ private:
 
     float                                 tempo_           = 120.0f;
     float                                 chaos_           = 35.0f;
+    float                                 mutation_        = 20.0f;
     float                                 density_         = 78.0f;
     float                                 gate_            = 72.0f;
     int                                   patternLength_   = 16;
     int                                   rootNote_        = 48;
+    float                                 masterVolume_    = 0.80f;
 
     float                                 synthCutoff_     = 800.0f;
     float                                 synthRes_        = 0.6f;
