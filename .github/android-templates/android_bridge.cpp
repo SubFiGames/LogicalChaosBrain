@@ -459,9 +459,11 @@ private:
         if (id == "mutation")        return normalise (value, 0.0f, 100.0f);
         if (id == "density")         return normalise (value, 0.0f, 100.0f);
         if (id == "gate")            return normalise (value, 5.0f, 100.0f);
-        if (id == "patternLength")   return normalise (value, 8.0f, 32.0f);
-        if (id == "rootNote")        return normalise (value, 36.0f, 72.0f);
-        if (id == "masterVolume")    return normalise (value, 0.0f, 1.0f);
+        if (id == "patternLength")      return normalise (value, 8.0f, 32.0f);
+        if (id == "timeSigNumerator")   return normalise (value, 2.0f, 12.0f);
+        if (id == "timeSigDenominator") return normalise (value, 4.0f, 8.0f);
+        if (id == "rootNote")           return normalise (value, 36.0f, 72.0f);
+        if (id == "masterVolume")       return normalise (value, 0.0f, 1.0f);
         if (id == "styleType")       return normalise (value, 0.0f, 9.0f);
         if (id == "scaleType")       return normalise (value, 0.0f, 10.0f);
         if (id == "complexityType")  return normalise (value, 0.0f, 3.0f);
@@ -490,9 +492,11 @@ private:
         if (id == "mutation")        { mutation_ = juce::jlimit (0.0f, 100.0f, value); return; }
         if (id == "density")         { density_ = juce::jlimit (0.0f, 100.0f, value); return; }
         if (id == "gate")            { gate_ = juce::jlimit (5.0f, 100.0f, value); return; }
-        if (id == "patternLength")   { patternLength_ = clampInt ((int) std::lround (value), 8, 32); return; }
-        if (id == "rootNote")        { rootNote_ = clampInt ((int) std::lround (value), 36, 72); return; }
-        if (id == "masterVolume")    { masterVolume_ = juce::jlimit (0.0f, 1.0f, value); return; }
+        if (id == "patternLength")      { patternLength_ = clampInt ((int) std::lround (value), 8, 32); return; }
+        if (id == "timeSigNumerator")   { timeSigNumerator_ = clampInt ((int) std::lround (value), 2, 12); return; }
+        if (id == "timeSigDenominator") { timeSigDenominator_ = clampInt ((int) std::lround (value), 4, 8); return; }
+        if (id == "rootNote")           { rootNote_ = clampInt ((int) std::lround (value), 36, 72); return; }
+        if (id == "masterVolume")       { masterVolume_ = juce::jlimit (0.0f, 1.0f, value); return; }
         if (id == "styleType")       { styleType_ = clampInt ((int) std::lround (value), 0, 9); return; }
         if (id == "scaleType")       { scaleType_ = clampInt ((int) std::lround (value), 0, 10); return; }
         if (id == "complexityType")  { complexityType_ = clampInt ((int) std::lround (value), 0, 3); return; }
@@ -1111,6 +1115,8 @@ private:
     float                                 density_         = 78.0f;
     float                                 gate_            = 72.0f;
     int                                   patternLength_   = 16;
+    int                                   timeSigNumerator_ = 4;
+    int                                   timeSigDenominator_ = 4;
     int                                   rootNote_        = 48;
     float                                 masterVolume_    = 0.80f;
 
