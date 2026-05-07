@@ -165,7 +165,64 @@ export default function createPatchView (patchConnection)
                 cursor: pointer;
                 accent-color: #00ffcc;
             }
+            .knob-wrap {
+                display: grid;
+                justify-items: center;
+                gap: 6px;
+                min-height: 76px;
+                padding: 8px 6px;
+                border-radius: 12px;
+                border: 1px solid rgba(0,255,204,0.18);
+                background: rgba(0,0,0,0.18);
+                touch-action: none;
+                user-select: none;
+            }
 
+            .knob {
+                width: 48px;
+                height: 48px;
+                border-radius: 50%;
+                position: relative;
+                background:
+                    radial-gradient(circle at 35% 28%, rgba(255,255,255,0.25), transparent 22%),
+                    radial-gradient(circle at center, rgba(0,255,204,0.18), rgba(0,0,0,0.42));
+                border: 2px solid rgba(0,255,204,0.42);
+                box-shadow: 0 0 18px rgba(0,255,204,0.12), inset 0 0 18px rgba(0,0,0,0.55);
+                cursor: ns-resize;
+            }
+
+            .knob::after {
+                content: "";
+                position: absolute;
+                left: 50%;
+                top: 7px;
+                width: 3px;
+                height: 15px;
+                border-radius: 999px;
+                background: #00ffcc;
+                box-shadow: 0 0 8px rgba(0,255,204,0.8);
+                transform: translateX(-50%);
+                transform-origin: 50% 17px;
+            }
+
+            .knob-value {
+                min-width: 66px;
+                padding: 4px 8px;
+                border-radius: 999px;
+                text-align: center;
+                color: #00ffcc;
+                background: rgba(0,255,204,0.08);
+                border: 1px solid rgba(0,255,204,0.18);
+                font-size: 12px;
+                font-weight: 900;
+                letter-spacing: 0.04em;
+            }
+
+            .knob-hint {
+                font-size: 9px;
+                color: rgba(217,255,247,0.42);
+                letter-spacing: 0.06em;
+            }
             /* ---- Step Grid ---- */
             .grid {
                 display: grid;
@@ -269,6 +326,7 @@ export default function createPatchView (patchConnection)
                 <div class="transport">
                     <button id="btnGenerate" class="btn-primary">GENERATE</button>
                     <button id="btnPlay"     class="btn-primary">PLAY</button>
+                    <button id="btnMutate"   class="btn-secondary">MUTATE</button>
                     <button id="btnStop"     class="btn-danger">STOP</button>
                     <button id="btnClear"    class="btn-secondary">CLEAR</button>
                     <button id="btnDump"     class="btn-secondary">REFRESH UI</button>
@@ -283,10 +341,64 @@ export default function createPatchView (patchConnection)
                         </select>
                     </label>
                     <label>Root Note
-                        <input id="rootNote" type="number" min="36" max="72" value="48">
+                        <select id="rootNote">
+                            <option value="36">C2</option>
+                            <option value="37">C#2</option>
+                            <option value="38">D2</option>
+                            <option value="39">D#2</option>
+                            <option value="40">E2</option>
+                            <option value="41">F2</option>
+                            <option value="42">F#2</option>
+                            <option value="43">G2</option>
+                            <option value="44">G#2</option>
+                            <option value="45">A2</option>
+                            <option value="46">A#2</option>
+                            <option value="47">B2</option>
+
+                            <option value="48" selected>C3</option>
+                            <option value="49">C#3</option>
+                            <option value="50">D3</option>
+                            <option value="51">D#3</option>
+                            <option value="52">E3</option>
+                            <option value="53">F3</option>
+                            <option value="54">F#3</option>
+                            <option value="55">G3</option>
+                            <option value="56">G#3</option>
+                            <option value="57">A3</option>
+                            <option value="58">A#3</option>
+                            <option value="59">B3</option>
+
+                            <option value="60">C4</option>
+                            <option value="61">C#4</option>
+                            <option value="62">D4</option>
+                            <option value="63">D#4</option>
+                            <option value="64">E4</option>
+                            <option value="65">F4</option>
+                            <option value="66">F#4</option>
+                            <option value="67">G4</option>
+                            <option value="68">G#4</option>
+                            <option value="69">A4</option>
+                            <option value="70">A#4</option>
+                            <option value="71">B4</option>
+
+                            <option value="72">C5</option>
+                        </select>
                     </label>
+
                     <label>Tempo
-                        <input id="tempo" type="number" min="50" max="220" value="120">
+                        <div id="tempoKnob" class="knob-wrap" data-min="50" data-max="220" data-step="1" data-value="120" data-suffix=" BPM">
+                            <div class="knob"></div>
+                            <div class="knob-value">120 BPM</div>
+                            <div class="knob-hint">drag up/down</div>
+                        </div>
+                    </label>
+
+                    <label>Master
+                        <div id="masterVolumeKnob" class="knob-wrap" data-min="0" data-max="100" data-step="1" data-value="80" data-suffix="%">
+                            <div class="knob"></div>
+                            <div class="knob-value">80%</div>
+                            <div class="knob-hint">drag up/down</div>
+                        </div>
                     </label>
 
                     <label>Style
@@ -358,7 +470,6 @@ export default function createPatchView (patchConnection)
                     <label>Mutation
                         <input id="mutation" type="range" min="0" max="100" value="20">
                     </label>
-                    </label>
                     <label>Density
                         <input id="density" type="range" min="0" max="100" value="78">
                     </label>
@@ -401,7 +512,103 @@ export default function createPatchView (patchConnection)
     // ----- DOM helpers -----
     const $ = (id) => root.shadowRoot.getElementById (id);
     const $q = (sel) => root.shadowRoot.querySelector (sel);
+    // ----- Knobs -----
+    function setupKnob (id, endpoint, formatter)
+    {
+        const wrap = $(id);
+        const knob = wrap.querySelector ('.knob');
+        const valueLabel = wrap.querySelector ('.knob-value');
 
+        const min = Number (wrap.dataset.min);
+        const max = Number (wrap.dataset.max);
+        const step = Number (wrap.dataset.step);
+        const suffix = wrap.dataset.suffix || '';
+
+        let value = Number (wrap.dataset.value);
+        let startY = 0;
+        let startValue = value;
+        let pointerActive = false;
+
+        const clampValue = (v) =>
+        {
+            const stepped = Math.round (v / step) * step;
+            return Math.max (min, Math.min (max, stepped));
+        };
+
+        const setValue = (v, shouldSend) =>
+        {
+            value = clampValue (v);
+            wrap.dataset.value = String (value);
+
+            const norm = (value - min) / (max - min);
+            const angle = -135 + norm * 270;
+
+            knob.style.transform = `rotate(${angle}deg)`;
+            valueLabel.textContent = formatter ? formatter (value) : `${value}${suffix}`;
+
+            if (shouldSend)
+                send (endpoint, endpoint === 'masterVolume' ? value / 100.0 : value);
+        };
+
+        setValue (value, false);
+
+        wrap.addEventListener ('pointerdown', (e) =>
+        {
+            pointerActive = true;
+            startY = e.clientY;
+            startValue = value;
+            wrap.setPointerCapture (e.pointerId);
+            e.preventDefault ();
+        });
+
+        wrap.addEventListener ('pointermove', (e) =>
+        {
+            if (! pointerActive)
+                return;
+
+            const drag = startY - e.clientY;
+            const distance = Math.abs (drag);
+
+            let sensitivity = 0.18;
+
+            if (distance > 60)
+                sensitivity = 0.28;
+
+            if (distance > 130)
+                sensitivity = 0.45;
+
+            const next = startValue + drag * sensitivity;
+            setValue (next, true);
+            e.preventDefault ();
+        });
+
+        wrap.addEventListener ('pointerup', (e) =>
+        {
+            pointerActive = false;
+            try { wrap.releasePointerCapture (e.pointerId); } catch {}
+            e.preventDefault ();
+        });
+
+        wrap.addEventListener ('pointercancel', () =>
+        {
+            pointerActive = false;
+        });
+
+        wrap.addEventListener ('wheel', (e) =>
+        {
+            const direction = e.deltaY < 0 ? 1 : -1;
+            setValue (value + direction * step, true);
+            e.preventDefault ();
+        }, { passive: false });
+
+        return {
+            getValue: () => value,
+            setValue
+        };
+    }
+
+    const tempoKnob = setupKnob ('tempoKnob', 'tempo', (v) => `${Math.round (v)} BPM`);
+    const masterVolumeKnob = setupKnob ('masterVolumeKnob', 'masterVolume', (v) => `${Math.round (v)}%`);
     // ----- drawGrid -----
     function drawGrid ()
     {
@@ -501,9 +708,8 @@ export default function createPatchView (patchConnection)
 
     // ----- Transport / Pattern controls -----
     $('btnGenerate').addEventListener ('click', () => send ('generate', 1));
-
+    $('btnMutate').addEventListener   ('click', () => send ('mutate', 1));
     $('btnPlay').addEventListener ('click', () => send ('play', 1));
-
     $('btnStop').addEventListener ('click', () =>
     {
         state.playingStep = -1;
@@ -526,15 +732,7 @@ export default function createPatchView (patchConnection)
     $('rootNote').addEventListener ('change', (e) =>
     {
         const v = clampInt (e.target.value, 36, 72);
-        e.target.value = v;
         send ('rootNote', v);
-    });
-
-    $('tempo').addEventListener ('change', (e) =>
-    {
-        const v = clampInt (e.target.value, 50, 220);
-        e.target.value = v;
-        send ('tempo', v);
     });
 
     $('styleType').addEventListener      ('change', (e) => send ('styleType',       Number (e.target.value)));
