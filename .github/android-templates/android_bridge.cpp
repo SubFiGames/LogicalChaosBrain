@@ -454,14 +454,21 @@ private:
 
     static float normaliseParameterValue (const std::string& id, float value)
     {
-        if (id == "tempo")         return normalise (value, 50.0f, 220.0f);
-        if (id == "chaos")         return normalise (value, 0.0f, 100.0f);
-        if (id == "density")       return normalise (value, 0.0f, 100.0f);
-        if (id == "gate")          return normalise (value, 5.0f, 100.0f);
-        if (id == "patternLength") return normalise (value, 8.0f, 32.0f);
-        if (id == "rootNote")      return normalise (value, 36.0f, 72.0f);
+        if (id == "tempo")           return normalise (value, 50.0f, 220.0f);
+        if (id == "chaos")           return normalise (value, 0.0f, 100.0f);
+        if (id == "mutation")        return normalise (value, 0.0f, 100.0f);
+        if (id == "density")         return normalise (value, 0.0f, 100.0f);
+        if (id == "gate")            return normalise (value, 5.0f, 100.0f);
+        if (id == "patternLength")   return normalise (value, 8.0f, 32.0f);
+        if (id == "rootNote")        return normalise (value, 36.0f, 72.0f);
 
-        if (id == "synthCutoff")   return normalise (value, 50.0f, 5000.0f);
+        if (id == "styleType")       return normalise (value, 0.0f, 9.0f);
+        if (id == "scaleType")       return normalise (value, 0.0f, 10.0f);
+        if (id == "complexityType")  return normalise (value, 0.0f, 3.0f);
+        if (id == "progressionType") return normalise (value, 0.0f, 5.0f);
+        if (id == "shapeType")       return normalise (value, 0.0f, 5.0f);
+
+        if (id == "synthCutoff")     return normalise (value, 50.0f, 5000.0f);
         if (id == "synthRes")      return normalise (value, 0.1f, 0.95f);
         if (id == "synthEnvMod")   return normalise (value, 0.0f, 5000.0f);
         if (id == "synthDecay")    return normalise (value, 0.05f, 2.0f);
@@ -478,14 +485,21 @@ private:
 
     void applyFallbackParameter (const std::string& id, float value)
     {
-        if (id == "tempo")         { tempo_ = juce::jlimit (50.0f, 220.0f, value); return; }
-        if (id == "chaos")         { chaos_ = juce::jlimit (0.0f, 100.0f, value); return; }
-        if (id == "density")       { density_ = juce::jlimit (0.0f, 100.0f, value); return; }
-        if (id == "gate")          { gate_ = juce::jlimit (5.0f, 100.0f, value); return; }
-        if (id == "patternLength") { patternLength_ = clampInt ((int) std::lround (value), 8, 32); return; }
-        if (id == "rootNote")      { rootNote_ = clampInt ((int) std::lround (value), 36, 72); return; }
+        if (id == "tempo")           { tempo_ = juce::jlimit (50.0f, 220.0f, value); return; }
+        if (id == "chaos")           { chaos_ = juce::jlimit (0.0f, 100.0f, value); return; }
+        if (id == "mutation")        { mutation_ = juce::jlimit (0.0f, 100.0f, value); return; }
+        if (id == "density")         { density_ = juce::jlimit (0.0f, 100.0f, value); return; }
+        if (id == "gate")            { gate_ = juce::jlimit (5.0f, 100.0f, value); return; }
+        if (id == "patternLength")   { patternLength_ = clampInt ((int) std::lround (value), 8, 32); return; }
+        if (id == "rootNote")        { rootNote_ = clampInt ((int) std::lround (value), 36, 72); return; }
 
-        if (id == "synthCutoff")   { synthCutoff_ = juce::jlimit (50.0f, 5000.0f, value); return; }
+        if (id == "styleType")       { styleType_ = clampInt ((int) std::lround (value), 0, 9); return; }
+        if (id == "scaleType")       { scaleType_ = clampInt ((int) std::lround (value), 0, 10); return; }
+        if (id == "complexityType")  { complexityType_ = clampInt ((int) std::lround (value), 0, 3); return; }
+        if (id == "progressionType") { progressionType_ = clampInt ((int) std::lround (value), 0, 5); return; }
+        if (id == "shapeType")       { shapeType_ = clampInt ((int) std::lround (value), 0, 5); return; }
+
+        if (id == "synthCutoff")     { synthCutoff_ = juce::jlimit (50.0f, 5000.0f, value); return; }
         if (id == "synthRes")      { synthRes_ = juce::jlimit (0.1f, 0.95f, value); return; }
         if (id == "synthEnvMod")   { synthEnvMod_ = juce::jlimit (0.0f, 5000.0f, value); return; }
         if (id == "synthDecay")    { synthDecay_ = juce::jlimit (0.05f, 2.0f, value); return; }
@@ -732,6 +746,18 @@ private:
     double                                sampleRate_      = 48000.0;
     double                                phase_           = 0.0;
 
+    // Melody Brain state.
+    // These values are controlled by view.js and will be used by the
+    // next generator pass. They are stored here now so the Android
+    // fallback engine and the UI are speaking the same language.
+    int                                   styleType_       = 0;   // 0 Auto, 1 Classical, 2 Pop, 3 Ambient, 4 Synthwave, 5 Techno, 6 House, 7 Hip Hop/Trap, 8 Cinematic, 9 Experimental
+    int                                   scaleType_       = 0;   // 0 Major, 1 Natural Minor, 2 Harmonic Minor, 3 Dorian, 4 Phrygian, 5 Lydian, 6 Mixolydian, 7 Minor Pentatonic, 8 Major Pentatonic, 9 Blues, 10 Chromatic
+    int                                   complexityType_  = 1;   // 0 Simple, 1 Nice, 2 Advanced, 3 Wild
+    int                                   progressionType_ = 0;   // 0 Auto, 1 I-V-vi-IV, 2 I-IV-V-I, 3 i-VI-III-VII, 4 i-iv-V-i, 5 ii-V-I-vi
+    int                                   shapeType_       = 0;   // 0 Auto, 1 Rise, 2 Fall, 3 Arch, 4 Wave, 5 Call/Response
+    float                                 mutation_        = 20.0f;
+
+    // Fallback synth/sequencer state (used when JUCE processor is disabled).
     // Fallback synth/sequencer state (used when JUCE processor is disabled).
     int                                   stepNotes_[32]   = {
                                                 48,48,48,48,48,48,48,48,
