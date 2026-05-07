@@ -288,8 +288,76 @@ export default function createPatchView (patchConnection)
                     <label>Tempo
                         <input id="tempo" type="number" min="50" max="220" value="120">
                     </label>
+
+                    <label>Style
+                        <select id="styleType">
+                            <option value="0" selected>Auto</option>
+                            <option value="1">Classical</option>
+                            <option value="2">Pop</option>
+                            <option value="3">Ambient</option>
+                            <option value="4">Synthwave</option>
+                            <option value="5">Techno</option>
+                            <option value="6">House</option>
+                            <option value="7">Hip Hop / Trap</option>
+                            <option value="8">Cinematic</option>
+                            <option value="9">Experimental</option>
+                        </select>
+                    </label>
+
+                    <label>Scale
+                        <select id="scaleType">
+                            <option value="0" selected>Major</option>
+                            <option value="1">Natural Minor</option>
+                            <option value="2">Harmonic Minor</option>
+                            <option value="3">Dorian</option>
+                            <option value="4">Phrygian</option>
+                            <option value="5">Lydian</option>
+                            <option value="6">Mixolydian</option>
+                            <option value="7">Minor Pentatonic</option>
+                            <option value="8">Major Pentatonic</option>
+                            <option value="9">Blues</option>
+                            <option value="10">Chromatic</option>
+                        </select>
+                    </label>
+
+                    <label>Complexity
+                        <select id="complexityType">
+                            <option value="0">Simple</option>
+                            <option value="1" selected>Nice</option>
+                            <option value="2">Advanced</option>
+                            <option value="3">Wild</option>
+                        </select>
+                    </label>
+
+                    <label>Progression
+                        <select id="progressionType">
+                            <option value="0" selected>Auto</option>
+                            <option value="1">I - V - vi - IV</option>
+                            <option value="2">I - IV - V - I</option>
+                            <option value="3">i - VI - III - VII</option>
+                            <option value="4">i - iv - V - i</option>
+                            <option value="5">ii - V - I - vi</option>
+                        </select>
+                    </label>
+
+                    <label>Shape
+                        <select id="shapeType">
+                            <option value="0" selected>Auto</option>
+                            <option value="1">Rise</option>
+                            <option value="2">Fall</option>
+                            <option value="3">Arch</option>
+                            <option value="4">Wave</option>
+                            <option value="5">Call / Response</option>
+                        </select>
+                    </label>
+
                     <label>Chaos
                         <input id="chaos" type="range" min="0" max="100" value="35">
+                    </label>
+
+                    <label>Mutation
+                        <input id="mutation" type="range" min="0" max="100" value="20">
+                    </label>
                     </label>
                     <label>Density
                         <input id="density" type="range" min="0" max="100" value="78">
@@ -469,7 +537,14 @@ export default function createPatchView (patchConnection)
         send ('tempo', v);
     });
 
+    $('styleType').addEventListener      ('change', (e) => send ('styleType',       Number (e.target.value)));
+    $('scaleType').addEventListener      ('change', (e) => send ('scaleType',       Number (e.target.value)));
+    $('complexityType').addEventListener ('change', (e) => send ('complexityType',  Number (e.target.value)));
+    $('progressionType').addEventListener('change', (e) => send ('progressionType', Number (e.target.value)));
+    $('shapeType').addEventListener      ('change', (e) => send ('shapeType',       Number (e.target.value)));
+
     $('chaos').addEventListener     ('input', (e) => send ('chaos',      Number (e.target.value)));
+    $('mutation').addEventListener  ('input', (e) => send ('mutation',   Number (e.target.value)));
     $('density').addEventListener   ('input', (e) => send ('density',    Number (e.target.value)));
     $('gate').addEventListener      ('input', (e) => send ('gate',       Number (e.target.value)));
     $('synthWave').addEventListener ('change',(e) => send ('synthWave',  Number (e.target.value)));
