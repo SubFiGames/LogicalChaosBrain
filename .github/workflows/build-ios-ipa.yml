@@ -1,0 +1,172 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios-ipa:
+    name: Signed iOS IPA
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Validate signing secrets
+        shell: bash
+        run: |
+          set -e
+
+          missing=0
+          for name in IOS_CERTIFICATE_P12_BASE64 IOS_CERTIFICATE_PASSWORD IOS_PROVISIONING_PROFILE_BASE64 IOS_TEAM_ID IOS_BUNDLE_ID IOS_PROFILE_NAME; do
+            if [ -z "${!name}" ]; then
+              echo "Missing GitHub secret: $name"
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            echo "Add the missing secrets before running the IPA workflow."
+            exit 1
+          fi
+        env:
+          IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          IOS_BUNDLE_ID: ${{ secrets.IOS_BUNDLE_ID }}
+          IOS_PROFILE_NAME: ${{ secrets.IOS_PROFILE_NAME }}
+
+      - name: Install signing certificate and provisioning profile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CERT_PATH="$RUNNER_TEMP/logicalchaos_ios_certificate.p12"
+          PROFILE_PATH="$RUNNER_TEMP/logicalchaos.mobileprovision"
+          KEYCHAIN_PATH="$RUNNER_TEMP/logicalchaos-signing.keychain-db"
+
+          echo "$IOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security import "$CERT_PATH" \
+            -P "$IOS_CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+
+          echo "Installed provisioning profile UUID: $PROFILE_UUID"
+        env:
+          IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD || 'logicalchaos-ci-keychain' }}
+
+      - name: Configure iOS device project
+        shell: bash
+        run: |
+          set -o pipefail
+
+          cmake \
+            -S ios \
+            -B build-ios-device \
+            -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DLOGICAL_CHAOS_IOS_BUNDLE_ID="$IOS_BUNDLE_ID" \
+            -DLOGICAL_CHAOS_IOS_TEAM_ID="$IOS_TEAM_ID" \
+            -DLOGICAL_CHAOS_IOS_CODE_SIGNING_ALLOWED=YES \
+            -DLOGICAL_CHAOS_IOS_CODE_SIGN_STYLE=Manual \
+            -DLOGICAL_CHAOS_IOS_CODE_SIGN_IDENTITY="Apple Distribution" \
+            -DLOGICAL_CHAOS_IOS_PROVISIONING_PROFILE_SPECIFIER="$IOS_PROFILE_NAME" \
+            2>&1 | tee configure-ios-ipa.log
+        env:
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          IOS_BUNDLE_ID: ${{ secrets.IOS_BUNDLE_ID }}
+          IOS_PROFILE_NAME: ${{ secrets.IOS_PROFILE_NAME }}
+
+      - name: Archive iOS app
+        shell: bash
+        run: |
+          set -o pipefail
+
+          xcodebuild \
+            -project build-ios-device/LogicalChaosIOS.xcodeproj \
+            -scheme LogicalChaosIOS \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$PWD/build-ios-device/LogicalChaosIOS.xcarchive" \
+            archive \
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
+            PRODUCT_BUNDLE_IDENTIFIER="$IOS_BUNDLE_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$IOS_PROFILE_NAME" \
+            2>&1 | tee archive-ios-ipa.log
+        env:
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          IOS_BUNDLE_ID: ${{ secrets.IOS_BUNDLE_ID }}
+          IOS_PROFILE_NAME: ${{ secrets.IOS_PROFILE_NAME }}
+
+      - name: Prepare export options
+        shell: bash
+        run: |
+          set -e
+
+          cp ios/ExportOptions.plist ExportOptions.plist
+          /usr/libexec/PlistBuddy -c "Add :teamID string $IOS_TEAM_ID" ExportOptions.plist || /usr/libexec/PlistBuddy -c "Set :teamID $IOS_TEAM_ID" ExportOptions.plist
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" ExportOptions.plist || true
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$IOS_BUNDLE_ID string $IOS_PROFILE_NAME" ExportOptions.plist || /usr/libexec/PlistBuddy -c "Set :provisioningProfiles:$IOS_BUNDLE_ID $IOS_PROFILE_NAME" ExportOptions.plist
+          cat ExportOptions.plist
+        env:
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          IOS_BUNDLE_ID: ${{ secrets.IOS_BUNDLE_ID }}
+          IOS_PROFILE_NAME: ${{ secrets.IOS_PROFILE_NAME }}
+
+      - name: Export IPA
+        shell: bash
+        run: |
+          set -o pipefail
+
+          mkdir -p export-ipa
+
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$PWD/build-ios-device/LogicalChaosIOS.xcarchive" \
+            -exportPath "$PWD/export-ipa" \
+            -exportOptionsPlist ExportOptions.plist \
+            2>&1 | tee export-ios-ipa.log
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LogicalChaos-iOS-IPA-Logs
+          path: |
+            configure-ios-ipa.log
+            archive-ios-ipa.log
+            export-ios-ipa.log
+            ExportOptions.plist
+          if-no-files-found: ignore
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LogicalChaos-iOS-IPA
+          path: export-ipa/*.ipa
