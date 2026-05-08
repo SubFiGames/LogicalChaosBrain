@@ -78,7 +78,7 @@ namespace
 
 - (BOOL)startAndReturnError:(NSError**)error
 {
-    if (audioEngine_.isRunning)
+    if (audioEngine_ != nil && audioEngine_.isRunning)
         return YES;
 
     AVAudioSession* session = AVAudioSession.sharedInstance;
@@ -92,22 +92,26 @@ namespace
     AVAudioFormat* outputFormat = [audioEngine_.outputNode inputFormatForBus:0];
     sampleRate_ = outputFormat.sampleRate > 0.0 ? outputFormat.sampleRate : 48000.0;
 
-    __weak LCAudioEngine* weakSelf = self;
+    __unsafe_unretained LCAudioEngine* owner = self;
     sourceNode_ = [[AVAudioSourceNode alloc] initWithRenderBlock:^OSStatus(BOOL* isSilence,
                                                                           const AudioTimeStamp* timestamp,
                                                                           AVAudioFrameCount frameCount,
                                                                           AudioBufferList* outputData)
     {
         (void) timestamp;
-        LCAudioEngine* strongSelf = weakSelf;
-        if (! strongSelf)
+
+        if (owner == nil)
         {
-            *isSilence = YES;
+            if (isSilence != nullptr)
+                *isSilence = YES;
             return noErr;
         }
 
-        [strongSelf renderFrames:frameCount outputData:outputData];
-        *isSilence = NO;
+        [owner renderFrames:frameCount outputData:outputData];
+
+        if (isSilence != nullptr)
+            *isSilence = NO;
+
         return noErr;
     }];
 
@@ -128,7 +132,7 @@ namespace
 
 - (BOOL)isRunning
 {
-    return audioEngine_.isRunning;
+    return audioEngine_ != nil && audioEngine_.isRunning;
 }
 
 - (void)resetPlayback
