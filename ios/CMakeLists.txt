@@ -11,6 +11,7 @@ set(APP_SOURCES
     App/main.mm
     App/LCAppDelegate.mm
     App/LCViewController.mm
+    App/LCAudioEngine.mm
     ../src/LogicalChaosEngine.cpp
 )
 
@@ -37,6 +38,7 @@ target_link_libraries(LogicalChaosIOS PRIVATE
     "-framework UIKit"
     "-framework Foundation"
     "-framework QuartzCore"
+    "-framework AVFoundation"
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
