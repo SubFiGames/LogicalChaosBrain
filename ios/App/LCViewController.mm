@@ -1,4 +1,5 @@
 #import "LCViewController.h"
+#import "LCAudioEngine.h"
 
 #include "LogicalChaosEngine.h"
 
@@ -9,7 +10,9 @@ using logicalchaos::LogicalChaosEngine;
 @interface LCViewController ()
 @property (nonatomic, strong) UILabel* titleLabel;
 @property (nonatomic, strong) UILabel* subtitleLabel;
+@property (nonatomic, strong) UILabel* statusLabel;
 @property (nonatomic, strong) UITextView* patternView;
+@property (nonatomic, strong) LCAudioEngine* audioEngine;
 @end
 
 @implementation LCViewController
@@ -46,11 +49,18 @@ using logicalchaos::LogicalChaosEngine;
     [root addArrangedSubview:self.titleLabel];
 
     self.subtitleLabel = [[UILabel alloc] init];
-    self.subtitleLabel.text = @"iOS Standalone Engine Test";
+    self.subtitleLabel.text = @"iOS Standalone Audio Test";
     self.subtitleLabel.textColor = [UIColor colorWithWhite:0.82 alpha:0.70];
     self.subtitleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBold];
     self.subtitleLabel.textAlignment = NSTextAlignmentCenter;
     [root addArrangedSubview:self.subtitleLabel];
+
+    self.statusLabel = [[UILabel alloc] init];
+    self.statusLabel.text = @"Audio: stopped";
+    self.statusLabel.textColor = [UIColor colorWithRed:1.0 green:0.48 blue:1.0 alpha:0.90];
+    self.statusLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
+    self.statusLabel.textAlignment = NSTextAlignmentCenter;
+    [root addArrangedSubview:self.statusLabel];
 
     UIStackView* buttons = [[UIStackView alloc] init];
     buttons.axis = UILayoutConstraintAxisHorizontal;
@@ -58,9 +68,18 @@ using logicalchaos::LogicalChaosEngine;
     buttons.distribution = UIStackViewDistributionFillEqually;
     [root addArrangedSubview:buttons];
 
-    [buttons addArrangedSubview:[self makeButton:@"GENERATE" action:@selector(generateTapped) primary:YES]];
-    [buttons addArrangedSubview:[self makeButton:@"MUTATE" action:@selector(mutateTapped) primary:NO]];
-    [buttons addArrangedSubview:[self makeButton:@"CLEAR" action:@selector(clearTapped) primary:NO]];
+    [buttons addArrangedSubview:[self makeButton:@"PLAY" action:@selector(playTapped) primary:YES]];
+    [buttons addArrangedSubview:[self makeButton:@"STOP" action:@selector(stopTapped) primary:NO]];
+    [buttons addArrangedSubview:[self makeButton:@"GENERATE" action:@selector(generateTapped) primary:NO]];
+
+    UIStackView* editButtons = [[UIStackView alloc] init];
+    editButtons.axis = UILayoutConstraintAxisHorizontal;
+    editButtons.spacing = 8.0;
+    editButtons.distribution = UIStackViewDistributionFillEqually;
+    [root addArrangedSubview:editButtons];
+
+    [editButtons addArrangedSubview:[self makeButton:@"MUTATE" action:@selector(mutateTapped) primary:NO]];
+    [editButtons addArrangedSubview:[self makeButton:@"CLEAR" action:@selector(clearTapped) primary:NO]];
 
     self.patternView = [[UITextView alloc] init];
     self.patternView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -79,6 +98,7 @@ using logicalchaos::LogicalChaosEngine;
 
     engine_.resetToDefaults();
     engine_.triggerEvent ("generate", 1.0);
+    self.audioEngine = [[LCAudioEngine alloc] initWithEngine:&engine_];
     [self refreshPatternText:@"Generated default pattern from shared C++ engine."];
 }
 
@@ -107,21 +127,44 @@ using logicalchaos::LogicalChaosEngine;
     return button;
 }
 
+- (void)playTapped
+{
+    NSError* error = nil;
+    if ([self.audioEngine startAndReturnError:&error])
+    {
+        self.statusLabel.text = @"Audio: playing";
+        [self.audioEngine resetPlayback];
+    }
+    else
+    {
+        self.statusLabel.text = [NSString stringWithFormat:@"Audio error: %@", error.localizedDescription ?: @"unknown"];
+    }
+}
+
+- (void)stopTapped
+{
+    [self.audioEngine stop];
+    self.statusLabel.text = @"Audio: stopped";
+}
+
 - (void)generateTapped
 {
     engine_.triggerEvent ("generate", 1.0);
+    [self.audioEngine resetPlayback];
     [self refreshPatternText:@"Generated new melody."];
 }
 
 - (void)mutateTapped
 {
     engine_.triggerEvent ("mutate", 1.0);
+    [self.audioEngine resetPlayback];
     [self refreshPatternText:@"Mutated current melody."];
 }
 
 - (void)clearTapped
 {
     engine_.triggerEvent ("clearPattern", 1.0);
+    [self.audioEngine resetPlayback];
     [self refreshPatternText:@"Cleared pattern."];
 }
 
