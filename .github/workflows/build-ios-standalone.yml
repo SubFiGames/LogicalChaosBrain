@@ -1,0 +1,68 @@
+name: Build iOS Standalone App
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios-simulator:
+    name: iOS Simulator App
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Configure iOS simulator project
+        shell: bash
+        run: |
+          set -e
+
+          cmake \
+            -S ios \
+            -B build-ios \
+            -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphonesimulator \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY=""
+
+      - name: Build iOS simulator app
+        shell: bash
+        run: |
+          set -e
+
+          cmake --build build-ios --config Release --parallel \
+            -- \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Collect app bundle
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p artifact
+
+          APP_PATH=$(find build-ios -name "*.app" -type d | head -1)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "No iOS .app bundle was built."
+            find build-ios -maxdepth 8 -print | head -800
+            exit 1
+          fi
+
+          echo "Found app: $APP_PATH"
+          cp -R "$APP_PATH" artifact/
+          find artifact -maxdepth 5 -print
+
+      - name: Upload iOS simulator artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LogicalChaos-iOS-Simulator-App
+          path: artifact
