@@ -18,7 +18,7 @@ jobs:
       - name: Configure iOS simulator project
         shell: bash
         run: |
-          set -e
+          set -o pipefail
 
           cmake \
             -S ios \
@@ -29,18 +29,30 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY=""
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+            2>&1 | tee configure-ios-standalone.log
 
       - name: Build iOS simulator app
         shell: bash
         run: |
-          set -e
+          set -o pipefail
 
           cmake --build build-ios --config Release --parallel \
             -- \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tee build-ios-standalone.log
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LogicalChaos-iOS-Build-Logs
+          path: |
+            configure-ios-standalone.log
+            build-ios-standalone.log
+          if-no-files-found: ignore
 
       - name: Collect app bundle
         shell: bash
