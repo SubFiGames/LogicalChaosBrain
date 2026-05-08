@@ -20,6 +20,11 @@ namespace
     {
         return std::max (lo, std::min (hi, v));
     }
+
+    static int clampInt (int v, int lo, int hi)
+    {
+        return std::max (lo, std::min (hi, v));
+    }
 }
 
 @implementation LCAudioEngine
@@ -146,6 +151,13 @@ namespace
     lp_ = 0.0f;
     bp_ = 0.0f;
 }
+
+- (void)setTempo:(float)tempo { tempo_ = clampFloat (tempo, 50.0f, 220.0f); }
+- (void)setMasterVolume:(float)volume { masterVolume_ = clampFloat (volume, 0.0f, 1.0f); }
+- (void)setSynthWave:(int)wave { synthWave_ = clampInt (wave, 0, 3); }
+- (void)setSynthCutoff:(float)cutoff { synthCutoff_ = clampFloat (cutoff, 50.0f, 5000.0f); }
+- (void)setSynthResonance:(float)resonance { synthRes_ = clampFloat (resonance, 0.1f, 0.95f); }
+- (void)setSynthDecay:(float)decay { synthDecay_ = clampFloat (decay, 0.05f, 2.0f); }
 
 - (void)renderFrames:(AVAudioFrameCount)frameCount outputData:(AudioBufferList*)outputData
 {
