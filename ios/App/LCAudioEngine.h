@@ -13,4 +13,11 @@ namespace logicalchaos { class LogicalChaosEngine; }
 - (void)resetPlayback;
 - (BOOL)isRunning;
 
+- (void)setTempo:(float)tempo;
+- (void)setMasterVolume:(float)volume;
+- (void)setSynthWave:(int)wave;
+- (void)setSynthCutoff:(float)cutoff;
+- (void)setSynthResonance:(float)resonance;
+- (void)setSynthDecay:(float)decay;
+
 @end
